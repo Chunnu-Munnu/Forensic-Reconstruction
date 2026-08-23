@@ -11,7 +11,16 @@ automatically.
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_CSV = REPO_ROOT / "Dataset" / "data" / "training_dataset_final.csv"
+# The merged UIR dataset. After the CTDB expansion (documentation.txt Part
+# 14.1) the plain CSV is ~120 MB, which is over GitHub's 100 MB per-file
+# hard limit, so the gzipped copy is what's committed. pandas.read_csv()
+# decompresses .gz transparently by extension, so nothing downstream needs
+# to change -- prefer the uncompressed file when it's present (faster to
+# re-read during development), fall back to the committed .gz otherwise.
+_DATA_DIR = REPO_ROOT / "Dataset" / "data"
+_DATA_CSV_PLAIN = _DATA_DIR / "training_dataset_final.csv"
+_DATA_CSV_GZ = _DATA_DIR / "training_dataset_final.csv.gz"
+DATA_CSV = _DATA_CSV_PLAIN if _DATA_CSV_PLAIN.exists() else _DATA_CSV_GZ
 
 # Every artifact this pipeline produces is organized under models/<split>/
 # and results/<split>/, where <split> is one of "strict", "mixed", or
@@ -114,7 +123,7 @@ PHYSICAL_BOUNDS = {
 CLASS_NAMES = ["Rear-end", "Angle", "Head-on", "Single-vehicle", "Sideswipe"]
 NUM_CLASSES = 5
 
-TRAIN_SOURCES = ("SHRP2", "BeamNG")
+TRAIN_SOURCES = ("SHRP2", "BeamNG", "CTDB")
 TEST_SOURCE = "CISS"
 
 # README's "Final Sample Weight = Source Weight x Class Weight" -- SynSHRP2
@@ -122,15 +131,19 @@ TEST_SOURCE = "CISS"
 # discounted slightly. CISS is real crash data (used only in --split-mode
 # mixed, where a fraction of it enters the train pool -- see
 # CISS_TRAIN_FRACTION below) and is weighted highest since it's the actual
-# target domain the model is ultimately evaluated against.
-SOURCE_WEIGHTS = {"SHRP2": 1.0, "BeamNG": 0.8, "CISS": 1.2}
+# target domain the model is ultimately evaluated against. CTDB (real
+# staged NHTSA crash tests, integrated via scripts/integrate_crash_test_db.py)
+# is real physical crash data like CISS, but derived (speed reconstructed
+# by backward integration from a single known impact speed, not directly
+# measured) -- weighted between SynSHRP2 and CISS to reflect that.
+SOURCE_WEIGHTS = {"SHRP2": 1.0, "BeamNG": 0.8, "CISS": 1.2, "CTDB": 1.1}
 
 # --split-mode mixed (documentation.txt Part 12): fraction of CISS events
 # (stratified by crash_class) that enters the train/val pool alongside
-# SynSHRP2+BeamNG; the remaining (1 - CISS_TRAIN_FRACTION) stays held out
-# as the real-world test set. 0.7 was chosen to leave a meaningful
-# held-out real-crash test set (~30% of 1,520 = ~456 events) while giving
-# the model enough real examples per class to actually learn from --
-# Sideswipe only has 89 CISS events total, so even at 0.7 that's just
-# ~62 real training examples for the rarest class.
-CISS_TRAIN_FRACTION = 0.7
+# SynSHRP2+BeamNG+CTDB; the remaining (1 - CISS_TRAIN_FRACTION) stays held
+# out as the real-world test set. Raised from 0.7 to 0.85 on explicit
+# request to prioritize accuracy over held-out test size -- this leaves
+# ~228 CISS events genuinely held out (still large enough to be a
+# meaningful real-world test, just noisier per-class than 0.7 gave,
+# especially for Sideswipe at ~13 held-out events).
+CISS_TRAIN_FRACTION = 0.85

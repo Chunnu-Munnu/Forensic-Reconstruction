@@ -1,24 +1,24 @@
 {
   "bilstm": {
     "class_name": "BiLSTMClassifier",
-    "accuracy": 0.49122807017543857,
-    "macro_f1_5class": 0.3188959718135919,
-    "macro_f1_4class_excl_headon": 0.3986199647669899,
-    "weighted_f1": 0.4685397605219507,
+    "accuracy": 0.4956140350877193,
+    "macro_f1_5class": 0.3292647058823529,
+    "macro_f1_4class_excl_headon": 0.4115808823529411,
+    "weighted_f1": 0.5002214482284142,
     "confusion_matrix": [
       [
-        31,
-        76,
+        28,
+        22,
         0,
-        35,
+        17,
         7
       ],
       [
-        17,
-        52,
+        13,
+        20,
         0,
-        30,
-        4
+        12,
+        7
       ],
       [
         0,
@@ -28,42 +28,42 @@
         0
       ],
       [
-        8,
-        28,
-        0,
-        136,
-        5
-      ],
-      [
-        2,
+        10,
         7,
         0,
-        13,
-        5
+        62,
+        10
+      ],
+      [
+        3,
+        1,
+        0,
+        6,
+        3
       ]
     ],
-    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.53      0.21      0.30       149\n         Angle       0.32      0.50      0.39       103\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.64      0.77      0.70       177\n     Sideswipe       0.24      0.19      0.21        27\n\n      accuracy                           0.49       456\n     macro avg       0.35      0.33      0.32       456\n  weighted avg       0.51      0.49      0.47       456\n"
+    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.52      0.38      0.44        74\n         Angle       0.40      0.38      0.39        52\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.64      0.70      0.67        89\n     Sideswipe       0.11      0.23      0.15        13\n\n      accuracy                           0.50       228\n     macro avg       0.33      0.34      0.33       228\n  weighted avg       0.52      0.50      0.50       228\n"
   },
   "lstm_attn": {
     "class_name": "LSTMAttentionClassifier",
-    "accuracy": 0.4517543859649123,
-    "macro_f1_5class": 0.28501138326267855,
-    "macro_f1_4class_excl_headon": 0.3562642290783482,
-    "weighted_f1": 0.41973218085545944,
+    "accuracy": 0.5175438596491229,
+    "macro_f1_5class": 0.3114300186715472,
+    "macro_f1_4class_excl_headon": 0.38928752333943395,
+    "weighted_f1": 0.4951937128421779,
     "confusion_matrix": [
       [
-        20,
-        73,
+        38,
+        11,
         0,
-        44,
-        12
+        16,
+        9
       ],
       [
-        20,
-        46,
-        0,
         32,
-        5
+        6,
+        0,
+        12,
+        2
       ],
       [
         0,
@@ -74,41 +74,41 @@
       ],
       [
         4,
-        25,
+        3,
         0,
-        134,
-        14
+        71,
+        11
       ],
       [
+        2,
+        1,
         0,
-        6,
-        0,
-        15,
-        6
+        7,
+        3
       ]
     ],
-    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.45      0.13      0.21       149\n         Angle       0.31      0.45      0.36       103\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.60      0.76      0.67       177\n     Sideswipe       0.16      0.22      0.19        27\n\n      accuracy                           0.45       456\n     macro avg       0.30      0.31      0.29       456\n  weighted avg       0.46      0.45      0.42       456\n"
+    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.50      0.51      0.51        74\n         Angle       0.29      0.12      0.16        52\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.67      0.80      0.73        89\n     Sideswipe       0.12      0.23      0.16        13\n\n      accuracy                           0.52       228\n     macro avg       0.32      0.33      0.31       228\n  weighted avg       0.50      0.52      0.50       228\n"
   },
   "transformer": {
     "class_name": "TransformerCrashClassifier",
-    "accuracy": 0.49780701754385964,
-    "macro_f1_5class": 0.31544668836112716,
-    "macro_f1_4class_excl_headon": 0.39430836045140893,
-    "weighted_f1": 0.4667021447644129,
+    "accuracy": 0.5043859649122807,
+    "macro_f1_5class": 0.3371076270177148,
+    "macro_f1_4class_excl_headon": 0.42138453377214347,
+    "weighted_f1": 0.49545876359549423,
     "confusion_matrix": [
       [
-        27,
-        75,
+        14,
+        38,
         0,
-        43,
-        4
+        11,
+        11
       ],
       [
-        16,
-        61,
+        7,
+        29,
         0,
-        23,
-        3
+        11,
+        5
       ],
       [
         0,
@@ -118,20 +118,20 @@
         0
       ],
       [
-        5,
-        29,
+        2,
+        7,
         0,
-        135,
-        8
+        67,
+        13
       ],
       [
+        2,
+        3,
         0,
-        9,
-        0,
-        14,
-        4
+        3,
+        5
       ]
     ],
-    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.56      0.18      0.27       149\n         Angle       0.35      0.59      0.44       103\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.63      0.76      0.69       177\n     Sideswipe       0.21      0.15      0.17        27\n\n      accuracy                           0.50       456\n     macro avg       0.35      0.34      0.32       456\n  weighted avg       0.52      0.50      0.47       456\n"
+    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.56      0.19      0.28        74\n         Angle       0.38      0.56      0.45        52\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.73      0.75      0.74        89\n     Sideswipe       0.15      0.38      0.21        13\n\n      accuracy                           0.50       228\n     macro avg       0.36      0.38      0.34       228\n  weighted avg       0.56      0.50      0.50       228\n"
   }
 }

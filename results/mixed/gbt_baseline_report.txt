@@ -1,33 +1,33 @@
-test_accuracy=0.5526
-test_macro_f1_5class=0.3389
-test_macro_f1_4class=0.4236
+test_accuracy=0.5570
+test_macro_f1_5class=0.3256
+test_macro_f1_4class=0.4070
 
                 precision    recall  f1-score   support
 
-      Rear-end       0.48      0.60      0.53       149
-         Angle       0.38      0.20      0.26       103
+      Rear-end       0.48      0.55      0.52        74
+         Angle       0.37      0.19      0.25        52
        Head-on       0.00      0.00      0.00         0
-Single-vehicle       0.68      0.78      0.73       177
-     Sideswipe       0.38      0.11      0.17        27
+Single-vehicle       0.68      0.84      0.75        89
+     Sideswipe       0.17      0.08      0.11        13
 
-      accuracy                           0.55       456
-     macro avg       0.38      0.34      0.34       456
-  weighted avg       0.53      0.55      0.53       456
+      accuracy                           0.56       228
+     macro avg       0.34      0.33      0.33       228
+  weighted avg       0.52      0.56      0.53       228
 
 
 Top features:
-  steering_deg_mean              0.1473
-  throttle_pct_missing_min       0.0982
-  yaw_rate_missing_min           0.0955
-  yaw_rate_max                   0.0684
-  steering_deg_max               0.0594
-  throttle_pct_mean              0.0528
-  yaw_rate_last                  0.0508
-  throttle_pct_max               0.0303
-  accel_long_min                 0.0302
-  accel_lat_std                  0.0201
-  throttle_pct_missing_mean      0.0147
-  speed_kmh_max                  0.0147
-  throttle_pct_missing_max       0.0146
-  yaw_rate_mean                  0.0136
-  accel_long_std                 0.0133
+  steering_deg_mean              0.1452
+  brake_active_last              0.1335
+  yaw_rate_max                   0.0739
+  yaw_rate_last                  0.0423
+  brake_active_missing_last      0.0417
+  throttle_pct_mean              0.0405
+  accel_long_std                 0.0284
+  steering_deg_max               0.0272
+  accel_long_min                 0.0258
+  accel_lat_std                  0.0255
+  speed_kmh_min                  0.0240
+  yaw_rate_missing_mean          0.0215
+  speed_kmh_max                  0.0194
+  throttle_pct_missing_max       0.0185
+  speed_kmh_mean                 0.0184

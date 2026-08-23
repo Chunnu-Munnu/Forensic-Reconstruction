@@ -1,21 +1,21 @@
 5-fold stratified CV over all CISS events (n=1520)
-per-fold accuracy: [0.5131578947368421, 0.5032894736842105, 0.46710526315789475, 0.47039473684210525, 0.506578947368421]
-per-fold macro-F1(4cls): [0.38732856191860443, 0.4207137879126975, 0.3419388300078795, 0.36060527478437926, 0.41042815083236783]
-mean accuracy: 0.4921 +/- 0.0194
-mean macro-F1(4cls): 0.3842 +/- 0.0296
+per-fold accuracy: [0.5460526315789473, 0.5197368421052632, 0.5032894736842105, 0.4967105263157895, 0.5197368421052632]
+per-fold macro-F1(4cls): [0.4200704180819542, 0.4102075523577659, 0.3826976958873641, 0.427445881444513, 0.4349824466417106]
+mean accuracy: 0.5171 +/- 0.0171
+mean macro-F1(4cls): 0.4151 +/- 0.0181
 
-pooled accuracy: 0.4921
-pooled macro-F1(5cls): 0.3079
-pooled macro-F1(4cls): 0.3849
+pooled accuracy: 0.5171
+pooled macro-F1(5cls): 0.3328
+pooled macro-F1(4cls): 0.4160
 
                 precision    recall  f1-score   support
 
-      Rear-end       0.46      0.16      0.24       495
-         Angle       0.35      0.53      0.42       345
+      Rear-end       0.46      0.47      0.47       495
+         Angle       0.35      0.22      0.27       345
        Head-on       0.00      0.00      0.00         0
-Single-vehicle       0.62      0.80      0.70       591
-     Sideswipe       0.22      0.16      0.18        89
+Single-vehicle       0.65      0.77      0.70       591
+     Sideswipe       0.23      0.21      0.22        89
 
-      accuracy                           0.49      1520
-     macro avg       0.33      0.33      0.31      1520
-  weighted avg       0.48      0.49      0.46      1520
+      accuracy                           0.52      1520
+     macro avg       0.34      0.34      0.33      1520
+  weighted avg       0.49      0.52      0.50      1520

@@ -3,6 +3,9 @@
 __pycache__/
 *.pyc
 
+# Personal learning notes -- not part of the deliverable, never commit
+understanding.txt
+
 # Regeneratable intermediate tensors (rebuild with scripts/build_sequences.py)
 models/*/tensors/
 models/*/shap_background_X.npy
@@ -12,3 +15,16 @@ models/*/shap_background_mask.npy
 results/*/*_test_probs.npy
 results/*/*_test_preds.npy
 results/*/*_test_attention_weights.npy
+
+# Raw NHTSA Crash Test Database downloads (16,816 files, re-fetchable with
+# scripts/fetch_crash_test_index.py + scripts/download_crash_test_db.py).
+# Their processed output is already merged into training_dataset_final.csv.
+Dataset/data/raw/CrashTestDB/
+
+# Pre-CTDB snapshot of the merged dataset, kept locally as a rollback point
+Dataset/data/training_dataset_final.backup_pre_ctdb.csv
+
+# The merged dataset is committed GZIPPED (~17 MB) -- the plain CSV is
+# ~120 MB, over GitHub's 100 MB per-file limit. scripts/config.py reads
+# either form, so `gzip -dk training_dataset_final.csv.gz` is optional.
+Dataset/data/training_dataset_final.csv

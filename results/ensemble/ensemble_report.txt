@@ -1,0 +1,26 @@
+Soft-voting ensemble: xgb_agg + xgb_cissonly + et_rich
+Repeated stratified CV: seeds=[42, 7, 2024], 5 folds each (n=15 train/test estimates)
+Non-CISS domain weight: 0.05
+CISS events: 1520 | out-of-domain pool: 10593
+Features: 198 physics+distributional, 55 aggregated
+
+xgb_agg          accuracy=0.5333 +/- 0.0207   macro-F1(4cls)=0.4304 +/- 0.0286
+xgb_cissonly     accuracy=0.5018 +/- 0.0261   macro-F1(4cls)=0.4331 +/- 0.0241
+et_rich          accuracy=0.5296 +/- 0.0216   macro-F1(4cls)=0.4065 +/- 0.0243
+ENSEMBLE         accuracy=0.5393 +/- 0.0215   macro-F1(4cls)=0.4362 +/- 0.0257
+
+Per-fold ensemble accuracy: [0.5921, 0.5493, 0.5132, 0.5461, 0.5526, 0.5099, 0.5658, 0.5296, 0.5362, 0.5461, 0.5526, 0.5362, 0.523, 0.5132, 0.523]
+Per-fold ensemble macro-F1(4cls): [0.4568, 0.4552, 0.3984, 0.474, 0.4822, 0.3997, 0.4471, 0.4332, 0.4552, 0.4246, 0.4321, 0.4459, 0.4073, 0.4293, 0.4016]
+
+POOLED report (seed 42, every CISS event tested once)
+                precision    recall  f1-score   support
+
+      Rear-end       0.49      0.52      0.50       495
+         Angle       0.43      0.29      0.34       345
+       Head-on       0.00      0.00      0.00         0
+Single-vehicle       0.67      0.78      0.72       591
+     Sideswipe       0.26      0.24      0.25        89
+
+      accuracy                           0.55      1520
+     macro avg       0.37      0.36      0.36      1520
+  weighted avg       0.53      0.55      0.54      1520
