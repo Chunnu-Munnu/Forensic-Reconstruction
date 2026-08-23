@@ -1,0 +1,1255 @@
+================================================================================
+EXPLAINABLE AI-BASED 3D VEHICLE ACCIDENT RECONSTRUCTION
+Full Project Documentation — Rationale, Data, Phase 2 Implementation & Results
+Last verified against actual repository data and a real training run: 2026-08-23
+================================================================================
+
+READING GUIDE: Parts 0-7 are the pre-implementation plan (data audit and the
+Phase 2 design as originally corrected). Parts 8-11 are the AS-BUILT record
+of the first training run: the actual environment, the actual code, three
+MORE bugs found only once real training was attempted, and the actual
+numbers from a real run on an RTX 3050 under the project's strict, zero-real-
+crashes-in-training split. Part 12 is a follow-up: after seeing Part 9's
+weak real-world numbers, the project owner chose to mix a majority of real
+CISS crashes into training for a much stronger, still-honestly-evaluated
+result. Part 13 is the final follow-up, requested when even Part 12's
+numbers weren't considered high enough: a gradient-boosted-tree baseline
+(which beats every deep model tried) plus 5-fold cross-validation over all
+1,520 real CISS crashes for the most statistically defensible number in
+this document. IF YOU ONLY READ ONE RESULTS SECTION, READ PART 13.2. Parts
+9 and 12 are kept and still reported alongside it as the harder/simpler-
+protocol comparisons (Part 12.0 / 13.0 explain why all three are kept
+rather than only reporting the best-looking one). Phases 3 (explainability),
+4 (physics validation) and 5 (3D reconstruction) are explicitly OUT OF
+SCOPE for this delivery -- see Part 8.0.
+
+This file is the single source of truth for why the project is built the way
+it is, what has actually been produced so far (verified against the real
+files in this repo, not assumed), and what Phase 2 onward will do and why.
+Anyone picking up this project — a collaborator, a reviewer, or a future
+version of an AI assistant — should be able to read this file top to bottom
+and understand the whole system without opening another document.
+
+--------------------------------------------------------------------------------
+PART 0 — HOW THIS DOCUMENT WAS PRODUCED
+--------------------------------------------------------------------------------
+
+Everything under "Verified Data Facts" below was measured directly by reading
+`Dataset/data/training_dataset_final.csv` row by row in this session (866K
+rows, 8,671 unique events). It is not copied from the planning notes that
+originally described this dataset — those notes assumed round numbers
+(e.g. "T=200 timesteps", "11 clean features", "~5,700 SynSHRP2 events") that
+turned out to be close but not exact, and in a few cases materially wrong in
+ways that change the Phase 2 design. Those discrepancies are called out
+explicitly in Part 3 so the reasoning is auditable.
+
+ENVIRONMENT ISSUE (RESOLVED -- see Part 8.1 for the full fix): the system
+Python 3.14 install had a numpy wheel built with MINGW-W64 that segfaulted
+on import. This was fixed by creating a clean Python 3.11 virtual
+environment (`.venv/`) and installing numpy/pandas/scikit-learn/PyTorch
+from official wheels into it. Every script in scripts/ was actually run
+through `.venv\Scripts\python.exe` on this machine's RTX 3050 -- Part 9
+records the real console output, not projected numbers.
+
+--------------------------------------------------------------------------------
+PART 1 — WHAT THIS PROJECT IS AND WHY IT EXISTS
+--------------------------------------------------------------------------------
+
+The problem: when a car crash happens, reconstructing what physically
+occurred today relies on manual forensic tools (PC-Crash, EDVAP, Virtual
+Crash), human-written police reports, and expert judgment. These are slow,
+expensive, not reproducible, and their reasoning cannot be independently
+audited — which matters when the output is used in court or insurance
+disputes.
+
+This project builds an open, reproducible pipeline that:
+1. Takes the sensor data a car already recorded at the moment of a crash
+   (its Event Data Recorder / EDR log — legally mandated in the US since
+   2012 under NHTSA 49 CFR Part 563, and cannot be altered after the event),
+2. Classifies the crash type and identifies the critical pre-crash moments
+   using a sequence model,
+3. Explains *why* the model reached that conclusion, per-feature and
+   per-timestep, in a form suitable for legal/forensic scrutiny,
+4. Validates that the reconstruction is physically possible (momentum
+   conservation, braking distance, trajectory continuity) before accepting
+   it,
+5. Renders the validated reconstruction as a 3D physics simulation.
+
+Three principles drive every design decision, referred to throughout as the
+"Forensic Integrity Framework":
+- Reproducibility — same input always produces the same output.
+- Explainability — every classification traces to specific sensor readings
+  at specific times, not a black-box score.
+- Physical validity — no output is accepted if it violates basic vehicle
+  dynamics.
+
+Scope is deliberately restricted to passenger cars: they have the most
+standardized, legally mandated sensor data, the largest available datasets,
+and the majority of real-world crash volume. This keeps the research
+rigorous rather than broad.
+
+Why this differs from existing work:
+- Commercial tools (PC-Crash, EDVAP, Virtual Crash) are proprietary, manual,
+  and produce no explanation.
+- AC3R (the closest academic comparator) reconstructs from *police report
+  text*, not sensor data — its accuracy is bounded by how well an officer
+  described the scene, and it has no XAI layer or physics validation.
+- ML crash-prediction papers (e.g. inTformer-style models) predict whether a
+  crash is *about to happen*; they do not reconstruct what already happened,
+  and have no 3D or forensic output.
+
+Target venues: IEEE Transactions on Intelligent Transportation Systems
+(primary), Accident Analysis and Prevention (alternative).
+
+--------------------------------------------------------------------------------
+PART 2 — DATA FOUNDATION
+--------------------------------------------------------------------------------
+
+2.1 What an EDR records
+Every US passenger car since 2012 carries an Event Data Recorder. On a crash
+trigger (airbag deployment or severe deceleration), it locks a record of the
+vehicle's sensor state in the preceding seconds — speed, delta-V (forward/
+back and side/side), throttle %, brake switch, steering angle (where
+available), engine RPM, ABS/ESC activation, seatbelt status, airbag timing.
+This is the most reliable objective forensic record available for passenger
+vehicles today.
+
+2.2 The three real data sources actually present in this repo
+
+  CISS (Crash Investigation Sampling System, NHTSA)
+    - Raw files present: `Dataset/data/raw/CISS/{2019..2024}/*.CSV`
+      (2019 files are UPPERCASE, 2020+ lowercase; 2024 adds extra tables —
+      NONMOTORIST, NMKINEMATICS, etc. — and a FORMAT24.sas spec file).
+    - Real, investigator-collected EDR data from actual crash scenes.
+    - Reserved EXCLUSIVELY for evaluation — never used in training. This is
+      what makes the reported performance numbers meaningful: they measure
+      generalization from synthetic/naturalistic training data to real
+      crashes, not memorization of the test distribution.
+    - Verified in `training_dataset_final.csv`: 1,520 unique CISS events.
+
+  SynSHRP2
+    - Raw file present: `Dataset/data/raw/SynSHRP2/Tabular_records.csv`.
+    - Naturalistic-driving-derived synthetic dataset; includes both actual
+      crashes and near-crashes (events that looked dangerous but weren't).
+      Near-crashes are the model's only source of "dangerous but avoided"
+      negative examples.
+    - Verified: 5,701 unique SHRP2 events in the merged dataset (this is the
+      count *after* dropping unmapped incident types, consistent with the
+      87.3%-retained figure in the SynSHRP2 cleaning doc).
+    - Training-only.
+
+  BeamNG synthetic data
+    - Generated via BeamNGpy to fill in rare crash classes underrepresented
+      in real data (see 2.4 below — this turns out to be load-bearing for
+      class 2/head-on).
+    - Verified: 1,450 unique BeamNG events in the merged dataset.
+    - Training-only, per README.
+
+  IGLAD PCM — described in the README as a planned Phase 1 source (used as
+  the template for the UIR schema design) but there is currently no raw or
+  processed IGLAD data in this repository. Treat it as not yet integrated;
+  do not assume PCM-derived events are present in `training_dataset_final.csv`.
+
+2.3 The Unified Intermediate Representation (UIR) — as it actually exists
+
+Verified schema of `Dataset/data/training_dataset_final.csv` (29 columns,
+865,311 rows, 8,671 unique events):
+
+  Core UIR signal columns (present across sources, used as model features):
+    speed_kmh, accel_long, accel_lat, throttle_pct, steering_deg,
+    engine_rpm, brake_active, abs_esc_active, yaw_rate
+
+  Missingness indicators (only two exist today):
+    throttle_missing, steering_missing
+
+  Identity / bookkeeping columns:
+    event_id, source, source_year, t (seconds relative to impact, range
+    verified as exactly -20.0 to 0.0), crash_class, is_crash
+
+  CISS-only raw/context columns (populated only for CISS-sourced rows,
+  NaN for every SynSHRP2/BeamNG row — verified at 91.81% NaN rate, which
+  matches the SHRP2+BeamNG share of total rows):
+    PTIME, CASEID, VEHNO, CRASHTYPE, DVTOTAL, DVLONG, DVLAT, SURFCOND,
+    LIGHTCOND, WEATHER, MODELYR
+
+  Extra column not documented elsewhere: abs_active (94.96% NaN, near-
+  identical missingness rate to yaw_rate — likely another CISS/EDR-specific
+  field; treat as redundant with abs_esc_active unless proven otherwise).
+
+The design rule enforced throughout: a value is either the real measurement
+or NaN with its indicator set to 1 — never an arbitrary imputed constant.
+See Part 3.2 for where this rule is currently under-applied.
+
+2.4 Verified data facts that matter for modeling
+
+  Event counts by source:            CISS 1,520 | SynSHRP2 5,701 | BeamNG 1,450
+  Total unique events:                8,671
+  crash_class distribution (all):     0 (rear-end) 3,478 | 1 (angle) 1,509 |
+                                       2 (head-on) 961 | 3 (single-veh) 1,813 |
+                                       4 (sideswipe) 910
+  is_crash distribution:              crash 4,054 | near-crash 4,617
+
+  *** CRITICAL FINDING — class_by_source ***
+    CISS:    {0: 495, 1: 345, 3: 591, 4: 89}         -> NO class 2 at all
+    SynSHRP2:{0: 2983, 1: 914, 2: 61, 3: 922, 4: 821}
+    BeamNG:  {1: 250, 2: 900, 3: 300}                 -> NO class 0 or 4
+
+  The CISS test set — the entire real-world evaluation set — contains ZERO
+  head-on (class 2) events. 900 of the 961 total head-on examples in the
+  whole dataset are BeamNG-synthetic. This means class-2 recall/precision
+  CANNOT be measured against real-world data at all under the current
+  source-based split; it can only be validated on synthetic/SynSHRP2 data.
+  This must be stated explicitly as a limitation in the paper and handled
+  explicitly in the evaluation code (see Part 4.7) — sklearn's
+  classification_report will silently show 0/0 or misleading numbers for
+  class 2 on the test set unless `labels=[0,1,2,3,4]` and
+  `zero_division=0` are passed and the class-2 row is annotated as
+  "not evaluable on real-world data."
+
+  Similarly, BeamNG contributes no rear-end or sideswipe examples — those
+  two classes are learned entirely from SynSHRP2 (plus CISS for eval).
+
+  Timesteps per event: min 21, max 443, mean 99.8, median 118,
+  p10=30, p25=46, p75=134, p90=149.
+  The max of 443 is well above the ~201 timesteps a clean 20s @ 10Hz window
+  should produce and needs investigating (see Part 3.3) before it's treated
+  as ground truth sequence length.
+
+  NaN rate per core feature (row-level, whole merged dataset):
+    speed_kmh 3.06% | accel_lat 0.52% | accel_long 4.67% | brake_active 24.60%
+    throttle_pct 86.84% | steering_deg 91.36% | engine_rpm 92.24%
+    abs_esc_active 93.95% | yaw_rate 94.96% | abs_active 94.96%
+
+  Only speed, both accelerations, and brake status are reliably present
+  across sources. Throttle and steering (86-91% missing) already have
+  indicator columns. Engine RPM, ABS/ESC, and yaw rate are *more* sparse
+  (92-95% missing) yet currently have NO missingness indicator column —
+  see Part 3.2, this is a real gap against the project's own stated design
+  rule, not a hypothetical one.
+
+--------------------------------------------------------------------------------
+PART 3 — WHERE THE ORIGINAL PHASE 2 PLAN NEEDED CORRECTING
+--------------------------------------------------------------------------------
+
+The initial Phase 2 sketch (BiLSTM / BiLSTM+Attention / Transformer,
+source-based split, weighted loss) was directionally correct and is kept.
+Four things needed correcting against the real data before it should be
+implemented:
+
+3.1 Sequence length T=200 is oversized and arbitrary
+  Real median length is 118, p90 is 149. Padding everything to a flat 200
+  wastes ~40% of every batch on padding for the median event, and the mask-
+  based "last valid timestep" / mean-pool logic in the original sketch still
+  works correctly at a smaller T. Recommendation: T=150 (covers ~90% of
+  events without truncation), truncate longer sequences by keeping the last
+  150 timesteps (closest to impact — already the correct truncation
+  direction in the original sketch), left-pad shorter ones. Re-check this
+  choice once the max=443 anomaly (3.3) is resolved, since that outlier may
+  be inflating the tail unrealistically.
+
+3.2 Missingness indicators are incomplete relative to the project's own rule
+  README and CLAUDE.md both establish: every optional/sparse feature gets a
+  paired `*_missing` indicator, never a silent fill. In the actual merged
+  data, throttle_pct and steering_deg follow this rule. engine_rpm (92%
+  missing), abs_esc_active (94% missing), yaw_rate (95% missing), and
+  abs_active (95% missing) do not have indicator columns yet. Two options,
+  either is defensible and should be a deliberate Phase 2 decision (not a
+  silent default):
+    (a) Add engine_rpm_missing, yaw_rate_missing, abs_missing columns before
+        sequence-building, matching the throttle/steering pattern, and keep
+        these features in the model (lets the model use the ~5-8% of events
+        where they ARE present, e.g. some CISS cases).
+    (b) Drop engine_rpm, abs_esc_active, abs_active, yaw_rate from the
+        Phase 2 feature set entirely — at >92% missing with no indicator,
+        zero-filling them contributes near-zero signal and mostly adds
+        noise/dead weight parameters.
+  Recommendation: (a) for yaw_rate specifically (it's a genuinely
+  discriminative signal for angle/sideswipe crashes and worth preserving
+  even sparse), (b) for engine_rpm/abs_esc_active/abs_active unless a later
+  audit shows they concentrate in exactly the cases where they'd be most
+  useful (e.g. ABS activation strongly correlated with braking events).
+
+3.3 The 443-timestep outlier needs a root-cause check, not a shrug
+  A clean -20s to 0s window at 10Hz should cap at 201 timesteps. Getting 443
+  means at least one event has either duplicate timestamps, a higher
+  effective sampling rate than documented, or a bug in how it was resampled/
+  interpolated in Phase 1. Before finalizing T, run a one-off check: find
+  the offending event_id(s), inspect whether `t` values repeat, and decide
+  whether to dedupe, resample, or drop those events as corrupted. Do not let
+  a handful of malformed events silently set the padding budget for the
+  entire dataset.
+
+3.4 CISS-only context columns (SURFCOND, LIGHTCOND, WEATHER, DVTOTAL/
+    DVLONG/DVLAT, CRASHTYPE, CASEID, VEHNO, MODELYR, PTIME) must NOT be fed
+    to the classifier as input features
+  They are 91.8% NaN specifically because they only exist for CISS rows —
+  including them as model inputs would let the model trivially learn "if
+  these fields are non-null, this is a CISS/test-distribution row," which
+  is a source-identity leak, not a crash-classification signal. They are,
+  however, exactly the right columns for Phase 4 physics validation
+  (DVTOTAL/DVLONG/DVLAT as ground truth, SURFCOND for friction coefficient)
+  and for post-hoc contextual analysis — keep them out of `FEATURE_COLS`
+  but keep them attached to the test-set event records for Phase 4/5 to
+  consume later.
+
+The corrected Phase 2 feature set given all of the above:
+  FEATURE_COLS = [
+      'speed_kmh', 'accel_long', 'accel_lat', 'brake_active',
+      'throttle_pct', 'throttle_missing',
+      'steering_deg', 'steering_missing',
+      'yaw_rate', 'yaw_rate_missing'        # new indicator, per 3.2(a)
+  ]
+  # engine_rpm, abs_esc_active, abs_active dropped per 3.2(b) unless a
+  # follow-up audit justifies keeping them with added indicators.
+T = 150 (pending the 3.3 outlier check).
+
+--------------------------------------------------------------------------------
+PART 4 — PHASE 2 PLAN (AS-CORRECTED)
+--------------------------------------------------------------------------------
+
+4.1 Objective
+Train a sequence model that takes a (T, F) window of pre-crash UIR sensor
+readings for one event and outputs: the crash class (0-4), a probability
+distribution over all 5 classes, per-timestep attention weights (feeds
+Phase 3's temporal explanation), and an implicit confidence score (max
+softmax probability, refined later by Phase 4's physics check).
+
+4.2 Sequence construction
+Group `training_dataset_final.csv` by `event_id`, sort by `t`, select
+FEATURE_COLS (Part 3.4), fill remaining NaNs in non-indicator feature
+columns with 0.0 (safe only because the paired indicator already marks
+those positions), truncate to the last T=150 timesteps if longer, left-pad
+with zeros (and mark padding positions in a boolean mask) if shorter. Drop
+any event whose crash_class is NaN/unmapped before this step — those never
+belonged in the labeled dataset in the first place per the CRASHTYPE mapping
+rules in CISS_DATA_CODES_GUIDE.md.
+
+4.3 Split — hard source-based, not random
+train/val pool = SynSHRP2 (5,701) + BeamNG (1,450) = 7,151 events, further
+split 85/15 into train/val, stratified by crash_class.
+test = CISS (1,520 events), used only for final evaluation, never touched
+during training or model selection.
+This is a deliberate, already-decided design choice (README, CLAUDE.md) —
+Phase 2 code must enforce it structurally (split by `source` first, not by
+a random shuffle that happens to look balanced).
+
+4.4 Normalization
+Fit StandardScaler on train split only; apply the same fitted scaler to
+val and test. Save the fitted scaler (`models/feature_scaler.pkl`) — Phase 5
+needs the identical transform at inference time on new BeamNG-simulated
+input. Binary indicator columns (throttle_missing, steering_missing,
+yaw_rate_missing) are scaled too, for implementation simplicity; their
+near-zero variance doesn't hurt the model, it just means the scaler barely
+transforms them.
+
+4.5 Class and source imbalance handling
+Class weights: inverse-frequency (`sklearn.utils.class_weight.
+compute_class_weight('balanced', ...)`) computed from the TRAIN split
+labels only (not the full dataset — the train distribution, per 2.4, is
+already skewed toward class 0 and away from classes 2/4 relative to the
+full dataset). Feed these weights into `nn.CrossEntropyLoss(weight=...)`.
+Source weights: SynSHRP2 = 1.0 (naturalistic/real driving behavior),
+BeamNG = 0.8 (fully synthetic, slightly discounted), applied as a per-
+sample multiplier alongside class weight, matching the README's
+`Final Sample Weight = Source Weight × Class Weight` formula. Implement as
+a per-sample weight vector passed to a reduction='none' loss, then
+manually weighted-averaged — `CrossEntropyLoss(weight=...)` alone only
+supports the class-weight term, not the source term.
+
+Report explicitly, given the 2.4 finding, that class 2 (head-on) in the
+training pool is overwhelmingly BeamNG-sourced (900/961 = 93.6%) — the
+model's ability to recognize head-on collisions is therefore mostly a
+measure of how well it generalizes from simulated head-on kinematics, not
+learned real-world driving behavior. Flag this directly in the results
+write-up, do not let it surface as a surprise in review.
+
+4.6 Three model architectures (kept from the original sketch, sized for
+    the real dataset scale — ~7,151 train events is a small-to-moderate
+    dataset for a Transformer, so capacity is deliberately kept modest)
+
+  Model A — BiLSTM baseline
+    2-layer bidirectional LSTM, hidden_dim=128, dropout=0.3, classification
+    from the last valid (non-padded) timestep's hidden state. No temporal
+    explanation output. Establishes the floor.
+
+  Model B — BiLSTM + additive attention
+    Same LSTM backbone, adds a learned scalar attention score per timestep,
+    softmax-normalized over non-padded positions, context = weighted sum of
+    LSTM outputs. Returns (logits, attention_weights) — the attention
+    weights are a direct, cheap source of temporal explanation and a useful
+    sanity-check baseline against Model C's self-attention.
+
+  Model C — Transformer encoder (primary/contribution model)
+    Linear input projection (F -> d_model=64), sinusoidal positional
+    encoding, 3 TransformerEncoder layers (nhead=4, dim_feedforward=256,
+    dropout=0.1), masked mean-pool over non-padded positions, linear
+    classification head. d_model is kept small (64, not 256/512) precisely
+    because F=10 input channels and ~7,151 training sequences do not
+    justify a large-capacity Transformer — oversizing here would overfit
+    long before it generalizes. Multi-head self-attention lets every
+    timestep attend directly to every other timestep regardless of
+    distance, which matters because pre-crash critical events are not
+    always in the final seconds (SynSHRP2 windows run up to 20s).
+
+  All three models are trained with the identical loop, weighted
+  CrossEntropyLoss (4.5), AdamW (lr=1e-3, weight_decay=1e-4),
+  ReduceLROnPlateau on validation macro-F1, gradient clipping at norm 1.0,
+  early stopping with patience=8, checkpointing the best-macro-F1 epoch.
+
+4.7 Evaluation on the CISS test set
+Run classification_report and confusion_matrix with `labels=[0,1,2,3,4]`
+explicitly passed (not inferred from the data present) and `zero_division=0`,
+so the report still shows a row for class 2 rather than silently omitting
+it — and that row is annotated in the write-up as "no real-world test
+examples available; not evaluable on CISS, see Part 2.4." Report accuracy,
+macro-F1, and weighted-F1 per model in a comparison table; this table is the
+required ablation/comparison for the paper. Target: Transformer macro-F1 >
+0.78 EXCLUDING class 2 from the macro average (since it has zero test
+support, sklearn's macro-F1 will already implicitly reflect this — confirm
+by also reporting a 4-class macro-F1 over {0,1,3,4} as the primary number,
+with the 5-class number reported alongside for completeness).
+
+4.8 Ablation studies (for the paper)
+  Ablation 1 — remove throttle_missing/steering_missing/yaw_rate_missing
+  indicator columns entirely, retrain Model C, compare macro-F1. Tests
+  whether the missingness-as-feature design decision (core to this
+  project's data philosophy) actually earns its keep.
+  Ablation 2 — zero out steering_deg (force steering_missing=1 for every
+  event), retrain, compare. Quantifies how much the model leans on a signal
+  that's only ~9% available in the first place.
+
+4.9 Artifacts Phase 3 requires, saved at the end of Phase 2
+  models/{BiLSTMClassifier,LSTMAttentionClassifier,TransformerCrashClassifier}_best.pt
+  models/feature_scaler.pkl
+  models/shap_background_X.npy, models/shap_background_mask.npy (200 random
+    train sequences, fixed seed 42)
+  models/X_test.npy, models/y_test.npy, models/mask_test.npy
+  models/test_event_ids.json (so Phase 3 can produce a per-accident report
+    and Phase 4 can re-join CISS context columns — DVTOTAL, SURFCOND, etc. —
+    by event_id)
+  models/feature_cols.json (exact FEATURE_COLS list and order, per Part 3.4)
+
+--------------------------------------------------------------------------------
+PART 5 — PHASES 3-5 (DESCRIBED FOR CONTEXT; OUT OF SCOPE FOR THIS DELIVERY)
+--------------------------------------------------------------------------------
+
+As of 2026-08-23 the project owner has scoped this delivery to Phase 2 only:
+train and validate the crash-classification model, document it thoroughly,
+and stop there. Phases 3 (explainability/SHAP), 4 (physics validation) and
+5 (3D reconstruction in BeamNG) are not implemented and are not planned as
+part of this delivery. They are kept here in outline form only because they
+explain *why* Phase 2 saves certain artifacts (attention weights, a SHAP
+background sample, per-event test predictions) even though nothing in this
+delivery consumes them yet -- a future engineer picking this project back
+up would build Phase 3 on top of the artifacts Part 9.7 lists as saved.
+
+Phase 3 (outline) — Explainability layer: SHAP values (feature x timestep
+attribution) plus the Transformer's attention weights (temporal heatmap)
+per event, combined into a structured JSON explanation report.
+
+Phase 4 (outline) — Physics validation: momentum conservation against
+recorded EDR delta-V (DVTOTAL/DVLONG/DVLAT, CISS-only, per Part 3.4),
+braking-distance consistency against SURFCOND-implied friction, and
+trajectory continuity checks.
+
+Phase 5 (outline) — 3D reconstruction in BeamNG.tech/BeamNGpy: renders the
+validated reconstruction as a multi-angle video and examinable 3D scene.
+
+None of the three are elaborated further in this document -- see the
+original project README.md for the full reasoning if this work resumes.
+
+--------------------------------------------------------------------------------
+PART 6 — THE FIVE CLAIMED RESEARCH CONTRIBUTIONS
+--------------------------------------------------------------------------------
+
+1. End-to-end reproducible open pipeline connecting data ingestion -> AI
+   classification -> temporal+feature explainability -> physics validation
+   -> 3D simulation, where existing work covers at most one stage.
+2. Structured EDR sensor data as the direct model input, rather than
+   free-text police reports (AC3R's approach) — objective, legally mandated
+   measurements instead of a human-written, potentially biased narrative.
+3. XAI (SHAP + attention) applied specifically as a forensic evidence layer,
+   not a model-diagnostic afterthought — the explanation is framed and
+   validated for legal defensibility, not just technical interpretability.
+4. Physics-consistency validation as an acceptance gate on AI output — no
+   comparable AI reconstruction system checks momentum conservation or
+   braking-distance plausibility before emitting a result.
+5. The "Forensic Integrity Framework" (Part 1) — reproducibility,
+   explainability, and physical validity as three co-equal, explicitly
+   named requirements that every design decision in the system is checked
+   against. This is the paper's conceptual contribution, independent of the
+   specific model architectures used to implement it.
+
+--------------------------------------------------------------------------------
+PART 7 — STATUS OF THE ORIGINAL OPEN ITEMS (all resolved during Part 9)
+--------------------------------------------------------------------------------
+
+[x] Fix the numpy/pandas environment — done, Part 8.1. Clean Python 3.11
+    venv, official PyPI wheels, PyTorch 2.5.1+cu121, CUDA confirmed working
+    on the RTX 3050.
+[x] Root-cause the 443-timestep outlier — done, Part 9.2 bug #1. It was
+    1,538 SynSHRP2 events with duplicate (event_id, t) rows from a Phase 1
+    join fan-out; fixed by averaging duplicates in build_sequences.py.
+[x] Missingness-indicator gap — resolved: engine_rpm / abs_esc_active /
+    abs_active dropped (100% missing for BOTH training sources
+    simultaneously -- unlearnable), yaw_rate AND brake_active both kept
+    with new *_missing indicators (brake_active turned out to need one too,
+    once its sentinel contamination was cleaned -- see Part 9.2 bug #3).
+    Final feature set is in Part 9.2.
+[ ] IGLAD PCM -- confirmed still out of scope: no raw or processed IGLAD
+    files exist anywhere in this repo. Not addressed in this delivery.
+[x] Zero-real-world-head-on-examples finding -- disclosed and handled
+    explicitly in evaluate.py (labels=[0..4], zero_division=0, separate
+    4-class macro-F1) and discussed at length in Part 9.6.
+
+Three ADDITIONAL bugs were found only once real training was attempted --
+they could not have been caught by the pre-implementation data audit above,
+because they only manifest as a trained model behaving badly, not as an
+obviously-wrong summary statistic. See Part 9.2 for all three in full.
+
+--------------------------------------------------------------------------------
+PART 8 — ENVIRONMENT, AND WHY THESE CHOICES
+--------------------------------------------------------------------------------
+
+8.0 Scope of this delivery
+This part onward documents what was actually built and run, on
+2026-08-23, on the project owner's own machine (an RTX 3050 laptop). The
+deliverable is: a working, evaluated crash-classification model (Phase 2),
+documented in enough depth that someone who has never seen this codebase
+can understand every design decision and reproduce every number in Part 9.
+Phases 3-5 (Part 5) are explicitly not part of this delivery.
+
+8.1 Python environment
+The machine's default Python (3.14, at C:\Python314) has a numpy wheel
+built with MINGW-W64 that prints "CRASHES ARE TO BE EXPECTED" and
+segfaults on import in combination with pandas. Rather than fight that
+install, a second, clean interpreter already present on the machine
+(Python 3.11.9, at C:\Users\...\Python311) was used to create a project-
+local virtual environment:
+
+    py -3.11 -m venv .venv
+    .venv\Scripts\python.exe -m pip install numpy pandas scikit-learn matplotlib seaborn joblib tqdm
+    .venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+This produced numpy 2.4.6, pandas 3.0.5, scikit-learn 1.9.0, and PyTorch
+2.5.1+cu121 with `torch.cuda.is_available() == True`, correctly detecting
+the "NVIDIA GeForce RTX 3050 6GB Laptop GPU" (confirmed via `nvidia-smi`:
+driver 596.21, CUDA 13.2 max-supported, 6144 MiB VRAM). `.venv/` is
+git-ignored -- rebuild it with the three commands above rather than
+committing it.
+
+8.2 Why the RTX 3050 barely matters here, and why that's fine
+It's worth saying plainly: this project does not need a GPU. The training
+pool is ~6,000 sequences of shape (160, 11) -- roughly 10 million floats
+total, and the largest model (the Transformer) has 151,045 parameters.
+For scale, a single modern LLM has more parameters than this project has
+training examples. Each of the three models trains to convergence with
+early stopping in 40-90 seconds on the RTX 3050 (Part 9.5 has exact
+timings); the same code would very likely finish in a few minutes on CPU
+alone. The GPU was used because it was available and it removes any
+question of whether slow iteration was limiting how many experiments
+could be run during debugging (Part 9.2 required 6 full retrain-and-
+evaluate cycles to isolate three separate bugs -- at CPU speed that would
+still have been very doable, just slower to iterate on). The real
+constraint on this project was never compute. It was, as Part 9.2 shows
+in detail, data quality: leftover Phase 1 defects that a small, fast model
+exposes immediately and a slow, expensive one would too, just more slowly.
+
+8.3 Why Python 3.11 and not the system's 3.14
+As of this writing, 3.14 is too new for reliable ML-library wheel
+coverage on Windows (hence the broken numpy) and PyTorch does not publish
+cu121 wheels for it at all. 3.11 is what `Dataset/requirements.txt`
+implicitly targets (its pinned versions -- numpy 2.5.0, pandas 3.0.3,
+scikit-learn 1.9.0 -- are the versions available for 3.11/3.12 at the time
+that file was generated) and has full wheel coverage for every package
+this project needs.
+
+--------------------------------------------------------------------------------
+PART 9 — PHASE 2 AS IMPLEMENTED: EVERY SCRIPT, WHY, AND WHAT IT DOES
+--------------------------------------------------------------------------------
+
+9.0 File map
+    scripts/config.py                 shared constants (paths, feature list, T, splits)
+    scripts/build_sequences.py        CSV -> cleaned (N,T,F) tensors + scaler + splits
+    scripts/models.py                 the three PyTorch model classes
+    scripts/train.py                  generic training loop, trains all 3 models
+    scripts/evaluate.py               loads checkpoints, evaluates on CISS test set
+    scripts/ablations.py              the two ablation studies (Part 4.8 / 9.6)
+    scripts/random_split_diagnostic.py  the secondary in-distribution sanity check
+    models/                           saved scaler, checkpoints, feature metadata
+    models/tensors/, tensors_random_split/   built tensors (git-ignored, regeneratable)
+    results/                          confusion matrices, JSON summaries, this data
+
+Every script is run through `.venv\Scripts\python.exe`, from the repo
+root, in the order the file map lists them (build -> train -> evaluate ->
+ablations / random_split_diagnostic, the last two being independent of
+each other and both optional/diagnostic). Part 10 gives copy-pasteable
+commands.
+
+9.1 scripts/config.py -- why one shared constants file
+Every other script imports FEATURE_COLS, SEQ_LEN, the split rule, and the
+physical sanity bounds from here, instead of each script defining its own
+copy. The reason this matters concretely: during development, three
+different values of SEQ_LEN were tried (200 in the original plan, 160
+after the real-data audit, 50 as a horizon-matching experiment -- Part
+9.4) and two different split modes (source-based, random). Because every
+script reads these from one place, changing an experiment meant editing
+one file and rerunning, never hunting for a hardcoded 200 in five
+different files that had silently drifted out of sync. config.py also
+holds the single most consequential decision record in the codebase:
+PHYSICAL_BOUNDS, which documents exactly which raw values were judged
+corrupted and why (Part 9.2 explains how these bounds were derived).
+
+9.2 scripts/build_sequences.py -- the data-cleaning and tensor-building
+pipeline, and the THREE bugs found here that the pre-implementation audit
+(Parts 0-7) could not have caught
+
+This is the only script that touches the raw 865,311-row CSV; every other
+script reads the .npy tensors it produces. Its main() does, in order:
+
+  load_and_clean() --
+    1. Coalesces the time axis: t_unified = t if not null else PTIME.
+       (This was flagged as a required fix back in Part 3 already -- CISS
+       rows store their pre-crash time in PTIME, not t.)
+    2. BUG #1 (found during this implementation, not anticipated by the
+       pre-implementation audit): applies a /3.6 correction to SynSHRP2's
+       speed_kmh column. Discovered by comparing raw per-source speed
+       distributions: SynSHRP2's speed_kmh had a median of 167.7 km/h and
+       a 90th percentile of 355.3 km/h -- physically absurd for a
+       naturalistic-driving study. Dividing the whole SynSHRP2 column by
+       3.6 produces a median of 46.6 km/h and a 90th percentile of 98.7
+       km/h, which lines up closely with CISS's real-crash distribution
+       (median 62.0, 90th 119.0) and BeamNG's (median 62.1, 90th 90.1).
+       The SynSHRP2_Cleaning_Explanation.md doc says `speed_kmh = Speed *
+       3.6` assuming the source JSON's `Speed` field was in m/s; the
+       evidence strongly suggests `Speed` was already km/h and got
+       converted a second time. This is FLAGGED, NOT SILENT: the code
+       prints exactly how many rows it touched, and the comment above it
+       in build_sequences.py explains this cannot be verified against the
+       original SynSHRP2 Kinematic_Signals JSON files because those files
+       are not present anywhere in this repository -- only the
+       Tabular_records.csv metadata file was ever committed. If those
+       JSON files become available, this correction should be checked
+       against them directly.
+    3. BUG #2 (found here): sanitizes physically-impossible sensor values
+       using config.PHYSICAL_BOUNDS. This was necessary because CISS rows
+       contain repeating values like 99996.0 and 99997.0 in accel_long /
+       accel_lat / throttle_pct / steering_deg -- an unmistakable
+       fingerprint of an un-decoded NHTSA "unknown" sentinel code that
+       Phase 1's CISS cleaning script failed to convert to NaN for a
+       meaningful fraction of rows. The single worst example: CISS
+       accel_long reaches 425,115 m/s^2 (43,700g) at its raw maximum.
+       brake_active -- documented in CISS_DATA_CODES_GUIDE.md as strictly
+       Binary -- takes on values up to 131,070.0 in the raw data. Every
+       bound in PHYSICAL_BOUNDS is deliberately generous (e.g. speed
+       capped at 250 km/h, acceleration at +-200 m/s^2 / ~20g, well above
+       real EDR impact peaks) specifically so it only catches values that
+       are unambiguously corrupted, never a genuine extreme crash reading.
+       Anything outside the bound becomes NaN, then gets picked up by the
+       exact same missing-indicator + zero-fill mechanism as a genuinely
+       unrecorded sensor -- which is the philosophically correct move: a
+       corrupted reading and an absent one both mean "we don't actually
+       know this value."
+       Concretely, on the final run: 2,502 speed_kmh, 2,556 accel_long,
+       2,378 accel_lat, 11,987 throttle_pct, 814 steering_deg, and 65,347
+       brake_active values were sanitized to NaN out of 865,311 total
+       rows.
+    4. Recomputes brake_active_missing, throttle_pct_missing,
+       steering_deg_missing, yaw_rate_missing from scratch, AFTER
+       sanitization -- so a value that got NaN'd for being corrupted is
+       correctly flagged as missing, not left silently zero with no
+       indicator.
+    5. Fills NaN in the 7 raw feature columns with 0.0 -- safe only
+       because every one of them now has a paired *_missing indicator
+       that already recorded whether that 0.0 is real or a placeholder.
+
+  Deduping (still inside load_and_clean()) --
+    BUG #0 (this one WAS anticipated in Part 3.3, and confirmed here):
+    1,538 SynSHRP2 events (27% of SynSHRP2) contained duplicate rows for
+    the same (event_id, t_unified) pair -- a many-to-one join fan-out
+    somewhere in Phase 1's SynSHRP2 merge. The worst single event reported
+    443 rows for what turned out to be exactly 100 unique timesteps, with
+    a repeating pattern of 8 duplicate rows at some t values and 1 at
+    others. Fixed by grouping on (event_id, t_unified) and averaging the
+    numeric feature columns -- 2,936 duplicate rows were collapsed this
+    way in the final run (865,311 -> 862,375 rows). Left unfixed, this
+    would have set a badly inflated, wrong sequence-length budget for the
+    whole dataset (the original plan's T=200 already over-corrected for
+    exactly this reason before the bug was even found -- see Part 3.1).
+
+  build_sequences(df, seq_len, feature_cols) --
+    Groups the cleaned table by event_id, sorts each group by
+    t_unified, and produces one (seq_len, F) array per event: if the
+    event has >= seq_len real timesteps, keeps the LAST seq_len (closest
+    to impact, since t_unified runs negative-to-zero); if fewer, LEFT-
+    pads with zeros. A boolean pad_mask (True = padding) is built
+    alongside every sequence -- every downstream model consumes this mask
+    to ignore padded positions. Events whose crash_class is NaN/unmapped
+    are dropped (0 were dropped in the final run -- Phase 1's CRASHTYPE
+    mapping had already excluded unmapped codes).
+    CRITICAL DESIGN FACT that mattered later (Part 9.3, BUG #3): because
+    padding is always on the LEFT, every sequence's real data ends at
+    index seq_len-1 no matter how short the original event was. Any
+    model code that tries to find "the last real timestep" by any means
+    other than simply reading index -1 is wrong for a left-padded
+    sequence.
+
+  main() -- ties it together --
+    Splits by source (Part 4.3: SynSHRP2+BeamNG -> 85/15 stratified
+    train/val, CISS -> test, held out entirely) or, with --split-mode
+    random, pools everything and does a stratified 70/15/15 split (Part
+    9.4). Fits StandardScaler on the train split ONLY, applies it to
+    val/test, saves it to models/feature_scaler.pkl (Phase 3/5, if ever
+    built, need this exact fitted scaler for new inputs). Computes
+    per-sample training weight = class_weight (inverse-frequency,
+    computed from the TRAIN split's label distribution only) x
+    source_weight (SynSHRP2=1.0, BeamNG=0.8, per the README's "Final
+    Sample Weight = Source Weight x Class Weight" formula). Saves
+    everything as .npy files plus a 200-event SHAP background sample and
+    the test set's event_ids (for any future Phase 3 work).
+
+  Final feature set actually shipped (11 columns, in this exact order --
+  see models/feature_cols.json):
+    speed_kmh, accel_long, accel_lat, brake_active, throttle_pct,
+    steering_deg, yaw_rate, brake_active_missing, throttle_pct_missing,
+    steering_deg_missing, yaw_rate_missing
+  This differs from the Part 3.4 planning draft in one way: brake_active
+  got a missing-indicator too (brake_active_missing), because once its
+  sentinel contamination was cleaned (bug #2 above), it became clear
+  brake_active is genuinely absent for a meaningful share of SynSHRP2 rows
+  (28.0%) and deserved the same treatment as throttle/steering/yaw_rate,
+  not just a silent zero-fill. engine_rpm, abs_esc_active, and
+  abs_active were dropped entirely, exactly as Part 3.2(b) recommended:
+  they are 100% missing for BOTH training sources (SynSHRP2 and BeamNG)
+  simultaneously, so the model's training set never contains a single
+  non-zero example of them -- there is nothing to learn from a column
+  that is constant across the entire training distribution, no matter how
+  often it's populated in the CISS-only test set.
+
+9.3 scripts/models.py -- the three architectures, and BUG #3
+
+BiLSTMClassifier, LSTMAttentionClassifier, and TransformerCrashClassifier
+all share the call signature forward(x, pad_mask) -> logits (or
+(logits, attn_weights) for the attention model). Architecture rationale
+(hidden sizes, d_model, head count, layer depth) is unchanged from the
+Part 4.6 plan and is documented in each class's docstring directly in the
+source file -- summarized: BiLSTM is the floor/baseline; LSTM+Attention
+adds a learned per-timestep score as a cheap, directly-interpretable
+temporal signal; the Transformer (151,045 params, deliberately smaller
+than the two LSTM variants at ~541K params each) uses self-attention so
+every timestep can attend to every other regardless of distance, sized
+small specifically because ~6,000 training sequences cannot constrain a
+large Transformer without overfitting.
+
+BUG #3 (found only once real training was attempted, and only visible on
+the CISS test set, not on validation): BiLSTMClassifier's forward() used
+to compute `lengths = (~pad_mask).sum(dim=1) - 1` and gather the LSTM's
+hidden state at that index, trying to find "the last real timestep."
+This logic assumes RIGHT-padding (real data first, padding after) -- but
+build_sequences.py always LEFT-pads (Part 9.2), so the real last timestep
+is always at index -1, regardless of sequence length. For a lightly-
+padded SynSHRP2 training sequence this bug is nearly harmless (the wrong
+index is still close to the right one). For a heavily-padded CISS test
+sequence -- often only 25-50 of 160 positions are real, so
+lengths-1 lands deep inside the zero-padded region, 100+ positions away
+from any real data -- this pulled the hidden state from pure padding
+noise. It was caught by inspecting BiLSTM's raw predictions on the CISS
+test set and finding it predicted the SAME class (Head-on) for all 1,520
+test events with 0% accuracy, a strong sign of a structural indexing bug
+rather than an ordinary generalization failure. Fixed by simply using
+out[:, -1, :] unconditionally (see the docstring left in place in
+models.py explaining why this is always correct for this codebase's
+left-padding convention). This one fix alone raised BiLSTMClassifier's
+validation macro-F1 from 0.6096 to 0.7303.
+
+9.4 The T=50 experiment (why SEQ_LEN=160 is what shipped)
+After bugs #1-#3 were fixed, CISS test performance was still poor (macro-
+F1 ~0.11-0.14, Part 9.6). One hypothesis: SynSHRP2 training sequences
+carry up to 16s of pre-crash context (up to 160 real timesteps) while
+CISS test sequences only ever cover the last 0.1-5s before impact (21-50
+real timesteps) -- and BeamNG, the only training source with a similarly
+short window, contributes ZERO rear-end or sideswipe training examples
+(Part 2.4), so the model may simply never have seen what a short,
+heavily-padded rear-end/sideswipe sequence looks like during training.
+This was tested directly: rebuilding all tensors with --seq-len 50
+(matching CISS's ~5s ceiling) and retraining all three models from
+scratch. Result: no improvement, and the Transformer got noticeably
+worse (test macro-F1 dropped to 0.0885, from 0.1061 at T=160) -- see the
+comparison in Part 9.6. This ruled out horizon mismatch as the dominant
+cause and confirmed T=160 (Part 3.1's original, percentile-driven choice)
+as the better setting; it was restored as the shipped default.
+
+9.5 scripts/train.py and scripts/evaluate.py -- the training loop and
+evaluation protocol
+train.py's per-sample-weighted cross-entropy loss, AdamW + ReduceLROnPlateau
+schedule, gradient clipping, and macro-F1-based early stopping (patience 8)
+are exactly as planned in Part 4.5-4.6 -- no deviations here, so they are
+not re-explained; read the docstrings at the top of each file, they are
+written to stand alone. What IS new relative to the plan: exact
+measured training cost on the RTX 3050 for the shipped T=160 run --
+BiLSTM 540,933 params / 25 epochs / 53.4s; LSTM+Attention 541,190 params /
+25 epochs / 55.0s; Transformer 151,045 params / 31 epochs / 87.6s. All
+three converge and early-stop comfortably inside two minutes each.
+evaluate.py's handling of the zero-head-on-support CISS test set (labels=
+[0,1,2,3,4] passed explicitly, zero_division=0, and BOTH a 5-class and a
+4-class-excluding-Head-on macro-F1 reported) is exactly as planned in
+Part 4.7.
+
+9.6 RESULTS -- the numbers, from the actual saved run artifacts
+
+(A) PRIMARY result: source-based split (README's mandated protocol),
+CISS held out entirely from training. n_test=1,520 real CISS crashes,
+of which 495 Rear-end, 345 Angle, 0 Head-on, 591 Single-vehicle, 89
+Sideswipe (see Part 2.4 for why Head-on support is zero here).
+
+  Model                      Val macro-F1   Test Acc   Test macro-F1(5cls)  Test macro-F1(4cls, excl. Head-on)  Test weighted-F1
+  BiLSTMClassifier               0.7303       0.2816          0.1409                0.1761                          0.2330
+  LSTMAttentionClassifier        0.7329       0.2526          0.1301                0.1626                          0.2188
+  TransformerCrashClassifier     0.7511       0.2711          0.1061                0.1326                          0.1998
+
+  Full per-class precision/recall/F1 and confusion matrices are in
+  results/*_confusion.png and results/comparison_summary.json.
+  Per-class pattern across all three models: Single-vehicle is
+  classified reasonably (recall 0.51-0.69) because it is the class
+  BeamNG contributes short, in-distribution-with-CISS training examples
+  for (Part 2.4: BeamNG has 300 Single-vehicle events); Rear-end and
+  Sideswipe recall are both near zero across all three models, and both
+  classes have ZERO BeamNG training examples -- their only training
+  signal comes from long-window SynSHRP2 sequences that look nothing
+  like a short CISS EDR capture.
+
+(B) SECONDARY diagnostic result: stratified random split, all sources
+pooled (SynSHRP2 + BeamNG + CISS mixed together, 70/15/15). Same
+features, same architecture (Transformer), same training procedure.
+n_test=1,301, with all 5 classes present (Head-on n=144 here).
+
+  Val macro-F1: 0.6911 (best epoch)   Test accuracy: 0.7010   Test macro-F1: 0.7063
+  Per-class F1: Rear-end 0.71, Angle 0.55, Head-on 0.96, Single-vehicle 0.82, Sideswipe 0.50
+
+  This is the single most important sanity-check result in this
+  document: it proves the 11-feature UIR representation and the
+  Transformer architecture are fully capable of learning 5-class crash
+  classification (Head-on F1=0.96!) when train and test data come from
+  the same distribution. The catastrophic gap between this (0.70 acc)
+  and result (A) (0.27 acc) is therefore a genuine, well-isolated
+  finding about cross-source generalization, NOT evidence of a broken
+  pipeline, insufficient features, or an unsuitable architecture --
+  those were all directly ruled out by this experiment.
+
+(C) Ablation studies (Transformer only, primary source-based split, same
+protocol as (A), for direct comparison against the (A) Transformer row):
+
+  Variant                                    Val macro-F1   Test Acc   Test macro-F1(5cls)  Test macro-F1(4cls)
+  Full model (11 features, baseline, row A)      0.7511       0.2711          0.1061                0.1326
+  No missingness indicators (7 features)         0.7494       0.2204          0.1120                0.1400
+  Steering forced to missing (always 0)          0.7523       0.2645          0.1116                0.1395
+
+  Honest reading of this table: on the in-distribution validation split,
+  all three variants are statistically indistinguishable (0.7494-0.7523).
+  On the CISS test set, the two ablated variants score marginally HIGHER
+  macro-F1 than the full-feature baseline, which is the opposite of what
+  the missingness-indicator design philosophy (README, CLAUDE.md) would
+  predict. Given how large and dominant the cross-source generalization
+  gap is (Part 9.6 section A/B), this small a difference (0.106 vs 0.112
+  vs 0.112 macro-F1, on a 1,520-event, single-training-seed test) is very
+  plausibly within run-to-run noise, not a real effect -- the ablation
+  signal is being swamped by the much larger domain-shift confound. A
+  cleaner test of these two ablations would rerun them under the
+  random-split protocol (result B), where the domain-shift confound is
+  absent; that was not done in this delivery due to time, and is the
+  clearest concrete next step if this work continues (Part 9.8).
+
+9.7 Artifacts saved by this delivery (for any future Phase 3+ work)
+  models/BiLSTMClassifier_best.pt, LSTMAttentionClassifier_best.pt,
+    TransformerCrashClassifier_best.pt -- best-val-macro-F1 checkpoints
+  models/TransformerCrashClassifier_randomsplit_best.pt -- from (B) above
+  models/feature_scaler.pkl -- the StandardScaler fit on the primary
+    (source-based) train split; use this exact scaler for any new input
+  models/feature_cols.json -- exact 11-column feature order (Part 9.2)
+  models/test_event_ids.json -- the 1,520 CISS event_ids in the test set,
+    in the same order as the saved test tensors, for joining back to
+    CISS-only context columns (SURFCOND, DVTOTAL, etc., Part 3.4) later
+  models/shap_background_X.npy / shap_background_mask.npy -- fixed
+    200-sequence random sample from the train split (seed 42), for a
+    future SHAP explainer's background distribution
+  results/*_confusion.png -- confusion matrix heatmaps, one per model
+  results/comparison_summary.json -- full primary-split numbers (A)
+  results/random_split_diagnostic_report.txt -- full (B) numbers
+  results/ablations_summary.json -- full (C) numbers
+  results/*_history.json -- per-epoch train/val loss and macro-F1 curves
+  results/*_test_attention_weights.npy -- LSTMAttentionClassifier's
+    per-event, per-timestep attention weights on the CISS test set
+
+9.8 Honest limitations and concrete next steps
+  - The primary, README-mandated result (real-world CISS generalization)
+    is weak: macro-F1 0.11-0.14, well below a naive majority-class
+    baseline's accuracy (predicting Single-vehicle for everything would
+    score 591/1520 = 38.9% accuracy, versus the best model's 28.2%). This
+    must be reported plainly in any paper draft, not minimized -- result
+    (B) is what demonstrates the underlying approach is sound; result
+    (A) demonstrates that a substantial, specific, and now well-
+    characterized domain gap exists between this project's synthetic/
+    naturalistic training sources and real EDR crash data.
+  - The strongest concrete lead for closing that gap, directly implied
+    by Part 9.6(A)'s per-class breakdown: BeamNG (the only training
+    source with a CISS-like short pre-impact window) currently generates
+    zero Rear-end and zero Sideswipe scenarios. Generating BeamNG
+    scenarios for those two classes specifically -- not more data in
+    general, but short-window data for exactly the classes currently
+    missing it -- is the single most likely lever to move result (A).
+  - The SynSHRP2 speed_kmh /3.6 correction (Part 9.2, bug #1) is
+    statistically well-evidenced but unverified against source data,
+    because the original per-event Kinematic_Signals JSON files are not
+    present in this repository. If those files ever become available,
+    checking a handful of raw Speed values directly against this
+    correction should be a first step before trusting it further.
+  - The ablation results (Part 9.6C) should be rerun under the
+    random-split protocol to get a clean signal, free of the domain-shift
+    confound that currently swamps them.
+  - Only one random seed was used throughout (RANDOM_STATE=42 everywhere,
+    config.py). None of the numbers in this document have a variance
+    estimate across seeds. For a paper submission, rerunning the primary
+    result (A) and the diagnostic (B) across 3-5 seeds and reporting
+    mean +- std would substantially strengthen the reported numbers.
+  - PHYSICAL_BOUNDS (Part 9.2, bug #2) were chosen to be generous and
+    defensible, not tuned. It's possible tighter or source-specific
+    bounds would recover more real signal from the sanitized columns
+    (throttle_pct alone lost 11,987 values, brake_active lost 65,347) --
+    this was not explored.
+
+--------------------------------------------------------------------------------
+PART 10 — HOW TO REPRODUCE EVERY NUMBER IN THIS DOCUMENT
+--------------------------------------------------------------------------------
+
+From the repo root, in PowerShell:
+
+    # one-time environment setup (Part 8.1)
+    py -3.11 -m venv .venv
+    .venv\Scripts\python.exe -m pip install --upgrade pip
+    .venv\Scripts\python.exe -m pip install numpy pandas scikit-learn matplotlib seaborn joblib tqdm
+    .venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+    # primary pipeline -- produces Part 9.6(A)
+    .venv\Scripts\python.exe scripts\build_sequences.py
+    .venv\Scripts\python.exe scripts\train.py
+    .venv\Scripts\python.exe scripts\evaluate.py
+
+    # secondary diagnostic -- produces Part 9.6(B)
+    .venv\Scripts\python.exe scripts\build_sequences.py --split-mode random
+    .venv\Scripts\python.exe scripts\random_split_diagnostic.py
+
+    # ablations -- produces Part 9.6(C) (rebuilds primary tensors first internally)
+    .venv\Scripts\python.exe scripts\build_sequences.py
+    .venv\Scripts\python.exe scripts\ablations.py
+
+Every script prints its own progress and final numbers to the console;
+nothing needs to be run silently or piped anywhere to get the results in
+Part 9.6. Total wall-clock time for all of the above on an RTX 3050:
+under 15 minutes, dominated by build_sequences.py's CSV parse (~1-2 min
+per invocation) rather than by any of the actual training.
+
+--------------------------------------------------------------------------------
+PART 11 — FILE MANIFEST (Phase 2 delivery)
+--------------------------------------------------------------------------------
+
+  scripts/config.py                       shared constants, see Part 9.1
+  scripts/build_sequences.py              data cleaning + tensor building, Part 9.2 / 12
+  scripts/models.py                       3 model classes, Part 9.3
+  scripts/train.py                        training loop, Part 9.5 / 12
+  scripts/evaluate.py                     CISS test-set evaluation, Part 9.5 / 12
+  scripts/ablations.py                    2 ablation studies, Part 9.6(C)
+  scripts/random_split_diagnostic.py      in-distribution sanity check, Part 9.6(B)
+  models/*.pt, *.pkl, *.json              trained checkpoints + metadata, Part 9.7
+  results/*                               plots, reports, JSON summaries, Part 9.7
+  .venv/                                  git-ignored; rebuild per Part 10
+  models/tensors*/                        git-ignored; rebuild per Part 10 / 12
+  documentation.txt                       this file
+  README.md                               project-level summary (kept in sync separately)
+
+  NOTE: after Part 12, the PRIMARY reported model/result is the mixed-
+  split one (files tagged _mixed). The Part 9 strict-split (untagged)
+  files are kept and still reported as the secondary, harder "zero real
+  crashes in training" evaluation -- see Part 12.0 for exactly which is
+  which and why both are kept.
+
+--------------------------------------------------------------------------------
+PART 12 — MIXED-SPLIT TRAINING: LETTING SOME REAL CISS INTO TRAINING
+--------------------------------------------------------------------------------
+
+12.0 Why this was added, and what changed
+Part 9.6 reported a large, well-isolated sim-to-real gap: models trained
+only on SynSHRP2+BeamNG and tested on 100%-held-out real CISS crashes
+scored macro-F1 0.11-0.14 -- worse than the trivial majority-class
+baseline (predicting Single-vehicle for every event scores 38.9%
+accuracy; the best strict-split model scored 28.2%). After reviewing that
+result, the project owner explicitly chose to trade some of the "zero
+real crashes seen during training" scientific purity for materially
+better, still-defensible numbers: let a majority of CISS into the
+train/val pool, fine-tune on it alongside the synthetic sources, and test
+on a smaller but still genuinely-never-seen slice of real CISS crashes.
+This is standard practice (most published crash-classification work does
+not claim a zero-shot cross-study generalization result at all) and does
+not invalidate Part 9's strict-split result -- both are kept and reported
+side by side, exactly as Part 9's artifacts were never deleted, only
+added to.
+
+12.1 What changed in the code
+  config.py -- added CISS_TRAIN_FRACTION = 0.7 (documented rationale
+    in-file: leaves ~456 real CISS events genuinely held out for test,
+    while giving even the rarest class, Sideswipe at 89 total CISS
+    events, ~62 real training examples) and added "CISS": 1.2 to
+    SOURCE_WEIGHTS (CISS is real, target-domain data, so it is trusted
+    at least as much as SynSHRP2's 1.0, and weighted a little higher
+    since it's literally what the model is evaluated against).
+  build_sequences.py -- added a third --split-mode mixed: splits CISS
+    itself (stratified by crash_class, same RANDOM_STATE=42) into a
+    train-pool slice and a held-out test slice, BEFORE the usual 85/15
+    train/val split is applied to the combined pool (CISS-train +
+    SynSHRP2 + BeamNG). Writes to models/tensors_mixed_split/ (kept
+    separate from models/tensors/, the strict-split tensors, so building
+    one split never destroys the other). Metadata files (scaler,
+    feature_cols.json, test_event_ids.json, SHAP background) are now
+    tagged by split mode too (e.g. feature_scaler_mixed.pkl) for the same
+    reason -- Part 9's strict-split metadata is preserved untouched.
+  train.py / evaluate.py -- added --split-mode {source,mixed}, which
+    points at the right tensor directory and tags checkpoint/history/
+    result filenames with _mixed so nothing in Part 9's saved output was
+    overwritten. Compare scripts/*.py's two output sets directly:
+    TransformerCrashClassifier_best.pt (Part 9, strict) vs.
+    TransformerCrashClassifier_mixed_best.pt (this part).
+
+12.2 The actual split
+  CISS_TRAIN_FRACTION=0.7, stratified by crash_class (Head-on still has
+  zero CISS events at any fraction, per Part 2.4 -- this limitation is
+  unchanged and unchangeable without new real Head-on crash data):
+    1,064 CISS events -> train/val pool (alongside all of SynSHRP2+BeamNG)
+    456 CISS events -> held out for test (real crashes, never trained on)
+  Combined with SynSHRP2+BeamNG, the full pool is then split 85/15 into
+  train=6,982 / val=1,233 (up from 6,078/1,073 in the strict split,
+  because it now includes the 1,064 CISS-train events too).
+
+12.3 RESULTS -- mixed-split, n_test=456 real, never-trained-on CISS
+crashes (149 Rear-end, 103 Angle, 0 Head-on, 177 Single-vehicle, 27
+Sideswipe)
+
+  Model                      Val macro-F1   Test Acc   Test macro-F1(5cls)  Test macro-F1(4cls)  Test weighted-F1
+  BiLSTMClassifier               0.6982       0.4912          0.3189                0.3986              0.4685
+  LSTMAttentionClassifier        0.6891       0.4518          0.2850                0.3563              0.4197
+  TransformerCrashClassifier     0.6986       0.4825          0.3051                0.3813              0.4401
+
+  Side-by-side against Part 9.6(A)'s strict-split result, for the same
+  three checkpoints' architecture (numbers repeated from Part 9.6 for
+  direct comparison):
+
+  Model                      Strict-split Test Acc -> Mixed-split Test Acc   Strict macro-F1(5cls) -> Mixed macro-F1(5cls)
+  BiLSTMClassifier                 0.2816   ->  0.4912                             0.1409   ->  0.3189
+  LSTMAttentionClassifier          0.2526   ->  0.4518                             0.1301   ->  0.2850
+  TransformerCrashClassifier       0.2711   ->  0.4825                             0.1061   ->  0.3051
+
+  Every model roughly DOUBLES its test accuracy and more than doubles its
+  macro-F1. The best mixed-split model (BiLSTM, 49.1% accuracy) now
+  clears the 38.9% majority-class baseline for the first time across
+  every experiment in this document -- the strict-split models (Part 9.6)
+  never did. Per-class detail (from the printed classification reports):
+  Single-vehicle recall is strong across all three (0.77-0.84); Angle
+  recall improved the most dramatically (was near-zero under the strict
+  split, now 0.39-0.50); Rear-end and Sideswipe recall improved but
+  remain the weakest classes (Rear-end recall only 0.13-0.21, Sideswipe
+  0.19-0.22) -- consistent with Part 9.8's finding that these are the two
+  classes BeamNG never generates short-window synthetic examples for, so
+  even with 70% of CISS's own Rear-end/Sideswipe examples now in
+  training, there are still comparatively few of them (Rear-end n_train
+  up from 0 BeamNG-short-window examples to ~346 real CISS ones;
+  Sideswipe similarly thin at ~62).
+
+  Interesting secondary observation: BiLSTM (the plain, no-attention
+  baseline) edges out the Transformer here (0.4912 vs 0.4825 accuracy),
+  reversing the ordering from both Part 9.6(A) and the random-split
+  diagnostic (B), where the Transformer was consistently best. With only
+  6,982 training sequences and three models this close together (all
+  within ~4 points of accuracy), this is plausibly noise from the single
+  random seed used throughout (RANDOM_STATE=42 everywhere) rather than a
+  real architectural advantage for BiLSTM -- see Part 9.8's existing
+  recommendation to rerun key results across multiple seeds before
+  treating small architecture-ranking differences as meaningful.
+
+12.4 Honest limitations of this result (same discipline as Part 9.8)
+  - This is no longer a zero-shot sim-to-real claim. 70% of CISS is now
+    in the training pool. The 456-event test result is still a genuine,
+    never-trained-on real-crash evaluation, but a reviewer who wants the
+    stronger "trained purely on synthetic/naturalistic data" claim should
+    be pointed at Part 9.6(A) instead, which remains available and
+    unchanged.
+  - The test set shrank from 1,520 to 456 CISS events, so these numbers
+    carry more sampling noise -- e.g. Sideswipe support is only 27 events
+    in this test split versus 89 in Part 9.6(A)'s.
+  - Rear-end and Sideswipe recall, while improved, are still the weakest
+    classes for the same underlying reason as before (Part 9.8): BeamNG
+    contributes zero training examples for either class. Mixing in real
+    CISS data helped (recall moved off zero) but did not fully close the
+    gap the way generating short-window BeamNG scenarios for those two
+    classes specifically would be expected to.
+  - Only one random seed was used (Part 9.8's seed-variance caveat
+    applies here too, and matters more given the BiLSTM/Transformer
+    ordering flip noted in 12.3).
+
+12.5 Reproducing this part
+    .venv\Scripts\python.exe scripts\build_sequences.py --split-mode mixed
+    .venv\Scripts\python.exe scripts\train.py --split-mode mixed
+    .venv\Scripts\python.exe scripts\evaluate.py --split-mode mixed
+  Produces models/tensors_mixed_split/, models/*_mixed_best.pt,
+  results/*_mixed_confusion.png, results/comparison_summary_mixed.json --
+  all separate from, and without touching, Part 9's strict-split files.
+
+--------------------------------------------------------------------------------
+PART 13 — GRADIENT-BOOSTED TREES + CROSS-VALIDATION (CURRENT BEST RESULT)
+--------------------------------------------------------------------------------
+
+13.0 Why this part exists
+After seeing Part 12's numbers (best accuracy 49.1%), the project owner
+asked directly for higher accuracy and how this still becomes a paper.
+Two additions followed, both standard, expected moves for a dataset this
+small (a few thousand training sequences) rather than exotic fixes:
+
+  (1) A gradient-boosted-tree baseline on aggregated per-event features
+      instead of raw timestep sequences. Deep sequence models (Part 9/12)
+      need much more data than this to reliably learn temporal structure
+      from raw signals; summarizing each event into a fixed feature
+      vector and handing it to XGBoost is a far lower-variance approach
+      for a dataset this size, and is a standard, EXPECTED baseline in
+      any small-sequence-classification paper -- a reviewer would ask
+      "did you compare against a simpler non-deep-learning baseline?" if
+      one weren't reported.
+  (2) 5-fold stratified cross-validation over ALL 1,520 CISS events,
+      instead of one static 70/30 split. This directly addresses a real
+      weakness in Part 12's evaluation: its 456-event test slice has
+      thin per-class support (Sideswipe n=27), so a single accuracy
+      number carries real sampling noise. CV uses every real CISS crash
+      as a test example exactly once and reports mean +- std across
+      folds plus a pooled report -- the standard way small labeled
+      medical/crash/safety datasets are evaluated in the literature.
+
+13.1 scripts/gbt_baseline.py -- feature engineering and model
+For each event, aggregates each of the 11 UIR feature columns (Part 9.2)
+over its REAL (non-padded) timesteps into 5 summary statistics: mean,
+std, min, max, and last-value (the most recent reading before impact,
+generally the single most informative point for a crash). That is 11 x 5
+= 55 engineered features per event, computed directly from the already-
+cleaned, already-scaled tensors -- no new raw-CSV parsing. An
+XGBoost multi-class classifier (400 trees, max_depth=5, learning_rate=
+0.05, early stopping on a 10% held-out slice of train) is trained on
+this feature table using the same mixed-split train/test partition as
+Part 12, for a direct apples-to-apples comparison.
+
+  Result (mixed-split test set, n=456, same test events as Part 12.3):
+    Accuracy: 55.3%   Macro-F1(5cls): 0.339   Macro-F1(4cls): 0.424
+  This BEATS every deep model from Part 12.3 (best was BiLSTM at 49.1%
+  accuracy / 0.319 macro-F1) on the identical test set.
+
+  Feature importance sanity check: the single most important feature is
+  steering_deg_mean, followed closely by throttle_pct_missing_min and
+  yaw_rate_missing_min. The two *_missing_min features are worth flagging
+  honestly: aggregating a binary missing-indicator's MIN over an event's
+  timesteps answers "was this field EVER recorded for this event" --
+  which is a strong proxy for data SOURCE (CISS sometimes records
+  throttle/yaw_rate; SynSHRP2/BeamNG never do), not necessarily a
+  genuine crash-dynamics signal. This means part of the GBT's accuracy
+  gain plausibly comes from an easier, source-identity-adjacent shortcut
+  rather than pure crash-kinematics reasoning. This is disclosed here
+  rather than left for a reviewer to find; it does not invalidate the
+  result (the model still has to get the actual class right, and
+  source-availability patterns ARE real, legitimate information: CISS's
+  own EDR simply does record some fields more often for certain crash
+  types) but should be mentioned as a caveat in any paper write-up.
+
+13.2 scripts/cross_validate.py -- the final, most defensible number
+Runs the identical XGBoost pipeline across 5 stratified folds of CISS
+(reusing aggregate() from gbt_baseline.py), each fold training on ~80%
+of CISS (1,216 events) + all of SynSHRP2 + all of BeamNG, testing on the
+other ~20% (304 events) -- so across the 5 folds, every one of CISS's
+1,520 real crashes is used as a held-out test example EXACTLY ONCE.
+Per-sample inverse-frequency class weights (Part 4.5's same formula,
+recomputed per fold from that fold's train labels) are passed to
+XGBoost's `sample_weight` -- an earlier unweighted run scored a higher
+raw accuracy (52.0%) but a WORSE macro-F1 (0.366) because it was
+achieving that accuracy by nearly ignoring Sideswipe (recall 0.02) and
+under-serving Angle (recall 0.18); with weighting, accuracy drops to
+49.2% but Sideswipe recall rises to 0.16 and Angle recall to 0.53 --
+the correct tradeoff for an imbalanced 5-class problem, since macro-F1
+(which treats all classes equally regardless of frequency) is the fair
+metric here, not raw accuracy.
+
+  FINAL RESULT (5-fold CV, all 1,520 real CISS crashes each tested once,
+  class-weighted XGBoost):
+    Per-fold accuracy:        0.513, 0.503, 0.467, 0.470, 0.507
+    Per-fold macro-F1(4cls):  0.387, 0.421, 0.342, 0.361, 0.410
+    Mean accuracy:       0.4921 +/- 0.0194
+    Mean macro-F1(4cls): 0.3842 +/- 0.0296
+
+    Pooled report (all 1,520 predictions concatenated across folds):
+      Rear-end        precision 0.46  recall 0.16  f1 0.24  (n=495)
+      Angle           precision 0.35  recall 0.53  f1 0.42  (n=345)
+      Head-on         n=0, not evaluable (Part 2.4, unchanged)
+      Single-vehicle  precision 0.62  recall 0.80  f1 0.70  (n=591)
+      Sideswipe       precision 0.22  recall 0.16  f1 0.18  (n=89)
+      Pooled accuracy 0.4921 | Pooled macro-F1(5cls) 0.3079 | Pooled
+      macro-F1(4cls, excl. Head-on) 0.3849
+
+  This is the number this project's paper should lead with: it is not
+  the single highest accuracy number produced during this work (the
+  unweighted, single-split GBT hit 55.3%), but it is the most
+  statistically defensible one -- validated across all 1,520 real
+  crashes rather than one 456-event slice, with a reported variance
+  (+/-1.9-3.0 points across folds) a reviewer can actually assess, and
+  optimized for the fair (class-balanced) metric rather than raw
+  accuracy inflated by ignoring rare classes.
+
+13.3 What this means for "how do we get a paper out of this"
+A few honest, direct points, since this was asked explicitly:
+  - A paper does not require a high absolute accuracy number. It
+    requires a clearly stated task, a defensible evaluation protocol, and
+    an honest, well-evidenced discussion of what the results mean. This
+    project now has three evaluation protocols, each answering a
+    different, clearly-stated question (Part 9's strict zero-shot split,
+    Part 12's mixed-training split, Part 13's cross-validated result),
+    which is itself a more complete evaluation than most papers in this
+    space report.
+  - The 49.2% mean accuracy / 0.38 macro-F1 cross-validated result, on a
+    genuinely hard 5-class real-world crash-classification task with a
+    severe class imbalance (Single-vehicle outnumbers Sideswipe roughly
+    4:1) and known missing/corrupted upstream sensor data (Part 9.2), is
+    a legitimate, publishable number for a methods/systems paper --
+    especially framed alongside the sim-to-real generalization finding
+    (Part 9.6) as two connected contributions: (a) quantifying how much
+    a strict synthetic-to-real transfer gap costs (macro-F1 0.14 -> 0.38,
+    roughly 2.7x, moving from zero real training data to a defensible
+    mixed/CV protocol) and (b) showing exactly which classes and why
+    (Rear-end/Sideswipe, because BeamNG generates neither) remain the
+    open problem.
+  - The single most impactful remaining lever, unchanged from Part 9.8,
+    is generating BeamNG scenarios for Rear-end and Sideswipe
+    specifically -- every evaluation protocol in this document
+    independently arrives at the same two weak classes for the same
+    identified reason. This is external work (needs the project owner's
+    BeamNG setup) and is the clearest recommendation for actually moving
+    the accuracy number further, more so than any additional modeling
+    change to what's already been tried here.
+  - Two things tried and explicitly NOT adopted, for transparency: (i)
+    increasing CISS_TRAIN_FRACTION further than 0.7/0.8 would keep
+    improving the reported number by shrinking the genuinely-held-out
+    test set, which is a diminishing-honesty trade the further it's
+    pushed -- 0.7 (Part 12) and 5-fold CV's ~0.8-per-fold (Part 13) were
+    judged the reasonable range; (ii) unweighted XGBoost's 55.3%/52.0%
+    single-number results are real but were not chosen as the headline
+    number specifically because they under-serve the rare classes, which
+    would look like cherry-picking the best-looking single metric.
+
+13.4 Reproducing this part
+    .venv\Scripts\python.exe scripts\gbt_baseline.py       (needs models/tensors_mixed_split/, Part 12.5)
+    .venv\Scripts\python.exe scripts\cross_validate.py      (rebuilds tensors from the CSV itself, ~1-2 min)
+  Produces results/gbt_baseline_report.txt and
+  results/cross_validation_report.txt.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

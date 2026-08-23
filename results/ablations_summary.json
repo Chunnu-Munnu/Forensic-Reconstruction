@@ -1,0 +1,14 @@
+{
+  "no_missing_indicators": {
+    "best_val_macro_f1": 0.7494264859228363,
+    "test_accuracy": 0.22039473684210525,
+    "test_macro_f1_5class": 0.11198509174495934,
+    "test_macro_f1_4class": 0.13998136468119918
+  },
+  "steering_zeroed": {
+    "best_val_macro_f1": 0.7523150743748966,
+    "test_accuracy": 0.2644736842105263,
+    "test_macro_f1_5class": 0.11161983744143629,
+    "test_macro_f1_4class": 0.13952479680179536
+  }
+}

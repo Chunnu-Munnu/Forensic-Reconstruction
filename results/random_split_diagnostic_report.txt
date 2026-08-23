@@ -1,0 +1,16 @@
+train=6069 val=1301 test=1301
+best_val_macro_f1=0.6911
+test_accuracy=0.7010
+test_macro_f1=0.7063
+
+                precision    recall  f1-score   support
+
+      Rear-end       0.82      0.62      0.71       522
+         Angle       0.51      0.60      0.55       227
+       Head-on       0.99      0.94      0.96       144
+Single-vehicle       0.77      0.86      0.82       272
+     Sideswipe       0.42      0.62      0.50       136
+
+      accuracy                           0.70      1301
+     macro avg       0.70      0.73      0.71      1301
+  weighted avg       0.73      0.70      0.71      1301

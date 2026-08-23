@@ -1,0 +1,13 @@
+[
+  "speed_kmh",
+  "accel_long",
+  "accel_lat",
+  "brake_active",
+  "throttle_pct",
+  "steering_deg",
+  "yaw_rate",
+  "brake_active_missing",
+  "throttle_pct_missing",
+  "steering_deg_missing",
+  "yaw_rate_missing"
+]
