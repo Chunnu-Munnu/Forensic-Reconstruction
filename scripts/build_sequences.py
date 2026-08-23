@@ -3,14 +3,18 @@ Phase 2, Step 1: turn the flat per-timestep UIR table into fixed-length
 (N, T, F) sequence tensors that a PyTorch model can consume, and split
 them by data source into train/val/test.
 
-Run once (takes ~1-2 minutes on the full 865k-row CSV):
-    .venv\\Scripts\\python.exe scripts\\build_sequences.py
+Run once per split mode (takes ~1-2 minutes on the full 865k-row CSV):
+    .venv\\Scripts\\python.exe scripts\\build_sequences.py --split-mode source
+    .venv\\Scripts\\python.exe scripts\\build_sequences.py --split-mode mixed
+    .venv\\Scripts\\python.exe scripts\\build_sequences.py --split-mode random
 
-Produces models/tensors/*.npy, models/feature_scaler.pkl,
-models/feature_cols.json, models/test_event_ids.json, and a printed
-data-quality report. Every later script (train.py, evaluate.py,
-ablations.py) reads from models/tensors/ instead of the raw CSV, so this
-is the only script that needs pandas.
+Produces models/<split>/tensors/*.npy, models/<split>/feature_scaler.pkl,
+models/<split>/feature_cols.json, models/<split>/test_event_ids.json, and
+a printed data-quality report, where <split> is "strict", "mixed", or
+"random_split" depending on --split-mode (see config.SPLIT_DIR_NAMES).
+Every later script (train.py, evaluate.py, ablations.py) reads from
+models/<split>/tensors/ instead of the raw CSV, so this is the only
+script that needs pandas.
 
 Two Phase-1 data bugs are corrected here rather than upstream (the raw
 processed CSVs are left untouched -- see documentation.txt Part 3.3/8 for
@@ -45,8 +49,8 @@ from sklearn.utils.class_weight import compute_class_weight
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import (  # noqa: E402
     CISS_TRAIN_FRACTION, CLASS_NAMES, DATA_CSV, FEATURE_COLS, INDICATOR_FOR,
-    MODEL_DIR, NUM_CLASSES, PHYSICAL_BOUNDS, RANDOM_STATE, RAW_FEATURE_COLS,
-    SEQ_LEN, SOURCE_WEIGHTS, TENSOR_DIR, TEST_SOURCE, TRAIN_SOURCES,
+    NUM_CLASSES, PHYSICAL_BOUNDS, RANDOM_STATE, RAW_FEATURE_COLS,
+    SEQ_LEN, SOURCE_WEIGHTS, TEST_SOURCE, TRAIN_SOURCES, model_dir, tensor_dir,
 )
 
 
@@ -195,14 +199,10 @@ def main():
     args = parser.parse_args()
     seq_len = args.seq_len
 
-    global TENSOR_DIR
-    if args.split_mode == "random":
-        TENSOR_DIR = TENSOR_DIR.parent / "tensors_random_split"
-    elif args.split_mode == "mixed":
-        TENSOR_DIR = TENSOR_DIR.parent / "tensors_mixed_split"
-
+    TENSOR_DIR = tensor_dir(args.split_mode)
+    OUT_MODEL_DIR = model_dir(args.split_mode)
     TENSOR_DIR.mkdir(parents=True, exist_ok=True)
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     df = load_and_clean()
     X, y, pad_mask, event_ids, sources = build_sequences(df, seq_len)
@@ -327,26 +327,23 @@ def main():
     np.save(TENSOR_DIR / "y_test.npy", y_test)
     np.save(TENSOR_DIR / "mask_test.npy", mask_test)
 
-    # Tag metadata filenames by split mode (mode "source" keeps the
-    # original untagged names for backward compatibility) so building a
-    # different split doesn't silently overwrite another split's scaler/
-    # metadata -- each of scaler / feature_cols / test_event_ids /
-    # SHAP background is specific to the split it was built from.
-    meta_tag = "" if args.split_mode == "source" else f"_{args.split_mode}"
-    dump(scaler, MODEL_DIR / f"feature_scaler{meta_tag}.pkl")
-    with open(MODEL_DIR / f"feature_cols{meta_tag}.json", "w") as f:
+    # Metadata is written into the same models/<split>/ directory as the
+    # tensors and (later) the checkpoints -- no more filename tagging
+    # needed now that each split has its own directory.
+    dump(scaler, OUT_MODEL_DIR / "feature_scaler.pkl")
+    with open(OUT_MODEL_DIR / "feature_cols.json", "w") as f:
         json.dump(FEATURE_COLS, f, indent=2)
-    with open(MODEL_DIR / f"test_event_ids{meta_tag}.json", "w") as f:
+    with open(OUT_MODEL_DIR / "test_event_ids.json", "w") as f:
         json.dump(event_ids[test_idx].tolist(), f)
 
     # Fixed SHAP background sample for Phase 3 (200 random train sequences)
     rng = np.random.default_rng(RANDOM_STATE)
     bg_idx = rng.choice(len(X_train), size=min(200, len(X_train)), replace=False)
-    np.save(MODEL_DIR / f"shap_background_X{meta_tag}.npy", X_train[bg_idx])
-    np.save(MODEL_DIR / f"shap_background_mask{meta_tag}.npy", mask_train[bg_idx])
+    np.save(OUT_MODEL_DIR / "shap_background_X.npy", X_train[bg_idx])
+    np.save(OUT_MODEL_DIR / "shap_background_mask.npy", mask_train[bg_idx])
 
     print(f"\nSaved tensors to {TENSOR_DIR}")
-    print(f"Saved scaler/metadata to {MODEL_DIR}")
+    print(f"Saved scaler/metadata to {OUT_MODEL_DIR}")
     print("Done.")
 
 

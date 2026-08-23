@@ -32,15 +32,15 @@ from sklearn.metrics import (accuracy_score, classification_report,
                               confusion_matrix, f1_score)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import CLASS_NAMES, MODEL_DIR, NUM_CLASSES, RESULTS_DIR, TENSOR_DIR  # noqa: E402
+from config import CLASS_NAMES, NUM_CLASSES, model_dir, results_dir, tensor_dir  # noqa: E402
 from models import build_model  # noqa: E402
 import train as train_module  # noqa: E402
 from train import MODEL_NAMES, load_split  # noqa: E402
 
 
-def evaluate_checkpoint(model_key, X_test, mask_test, device, tag=""):
+def evaluate_checkpoint(model_key, X_test, mask_test, device, ckpt_dir):
     class_name = MODEL_NAMES[model_key]
-    ckpt_path = MODEL_DIR / f"{class_name}{tag}_best.pt"
+    ckpt_path = ckpt_dir / f"{class_name}_best.pt"
     model = build_model(model_key, input_dim=X_test.shape[-1], num_classes=NUM_CLASSES)
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
     model.to(device).eval()
@@ -65,15 +65,15 @@ def evaluate_checkpoint(model_key, X_test, mask_test, device, tag=""):
             np.concatenate(attn) if attn else None)
 
 
-def save_confusion_matrix(y_true, y_pred, class_name, out_dir, tag=""):
+def save_confusion_matrix(y_true, y_pred, class_name, out_dir):
     cm = confusion_matrix(y_true, y_pred, labels=list(range(NUM_CLASSES)))
     fig, ax = plt.subplots(figsize=(7, 6))
     sns.heatmap(cm, annot=True, fmt="d", xticklabels=CLASS_NAMES,
                 yticklabels=CLASS_NAMES, cmap="Blues", ax=ax)
     ax.set_xlabel("Predicted"); ax.set_ylabel("True")
-    ax.set_title(f"{class_name}{tag} -- test set")
+    ax.set_title(f"{class_name} -- test set")
     plt.tight_layout()
-    out_path = out_dir / f"{class_name}{tag}_confusion.png"
+    out_path = out_dir / f"{class_name}_confusion.png"
     plt.savefig(out_path, dpi=150)
     plt.close()
     return cm, out_path
@@ -82,16 +82,16 @@ def save_confusion_matrix(y_true, y_pred, class_name, out_dir, tag=""):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split-mode", choices=["source", "mixed"], default="source",
-                         help="'source' (default) evaluates the strict-split checkpoints on "
-                              "models/tensors/. 'mixed' evaluates the mixed-split checkpoints "
-                              "on models/tensors_mixed_split/.")
+                         help="'source' (default) evaluates the strict-split checkpoints in "
+                              "models/strict/. 'mixed' evaluates the mixed-split checkpoints "
+                              "in models/mixed/.")
     args = parser.parse_args()
 
-    tag = "_mixed" if args.split_mode == "mixed" else ""
-    if args.split_mode == "mixed":
-        train_module._TENSOR_DIR = TENSOR_DIR.parent / "tensors_mixed_split"
+    ckpt_dir = model_dir(args.split_mode)
+    out_dir = results_dir(args.split_mode)
+    train_module._TENSOR_DIR = tensor_dir(args.split_mode)
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     X_test, y_test, mask_test = load_split("test")
@@ -104,7 +104,7 @@ def main():
     summary = {}
     for model_key in MODEL_NAMES:
         class_name = MODEL_NAMES[model_key]
-        preds, probs, attn = evaluate_checkpoint(model_key, X_test, mask_test, device, tag=tag)
+        preds, probs, attn = evaluate_checkpoint(model_key, X_test, mask_test, device, ckpt_dir)
 
         print(f"\n{'=' * 70}\n{class_name}\n{'=' * 70}")
         report = classification_report(
@@ -124,7 +124,7 @@ def main():
         weighted_f1 = f1_score(y_test, preds, average="weighted",
                                 labels=list(range(NUM_CLASSES)), zero_division=0)
 
-        cm, cm_path = save_confusion_matrix(y_test, preds, class_name, RESULTS_DIR, tag=tag)
+        cm, cm_path = save_confusion_matrix(y_test, preds, class_name, out_dir)
         print(f"Accuracy: {acc:.4f} | Macro-F1 (5-class): {macro_f1_5:.4f} | "
               f"Macro-F1 (4-class, excl. Head-on): {macro_f1_4:.4f} | "
               f"Weighted-F1: {weighted_f1:.4f}")
@@ -141,11 +141,11 @@ def main():
         }
 
         if attn is not None:
-            np.save(RESULTS_DIR / f"{class_name}{tag}_test_attention_weights.npy", attn)
+            np.save(out_dir / f"{class_name}_test_attention_weights.npy", attn)
             print(f"Saved per-event attention weights ({attn.shape}) for Phase 3.")
 
-        np.save(RESULTS_DIR / f"{class_name}{tag}_test_probs.npy", probs)
-        np.save(RESULTS_DIR / f"{class_name}{tag}_test_preds.npy", preds)
+        np.save(out_dir / f"{class_name}_test_probs.npy", probs)
+        np.save(out_dir / f"{class_name}_test_preds.npy", preds)
 
     print(f"\n{'=' * 90}\nFINAL COMPARISON TABLE ({test_label}, n={len(y_test)})\n{'=' * 90}")
     header = f"{'Model':<28}{'Accuracy':>10}{'Macro-F1 (5cls)':>18}{'Macro-F1 (4cls)':>18}{'Weighted-F1':>14}"
@@ -154,7 +154,7 @@ def main():
         print(f"{s['class_name']:<28}{s['accuracy']:>10.4f}{s['macro_f1_5class']:>18.4f}"
               f"{s['macro_f1_4class_excl_headon']:>18.4f}{s['weighted_f1']:>14.4f}")
 
-    summary_path = RESULTS_DIR / f"comparison_summary{tag}.json"
+    summary_path = out_dir / "comparison_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"\nFull summary saved to {summary_path}")

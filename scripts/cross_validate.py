@@ -30,8 +30,14 @@ from sklearn.utils.class_weight import compute_class_weight
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_sequences import build_sequences, load_and_clean  # noqa: E402
-from config import CLASS_NAMES, NUM_CLASSES, RANDOM_STATE, RESULTS_DIR, SEQ_LEN, TEST_SOURCE  # noqa: E402
+from config import CLASS_NAMES, NUM_CLASSES, RANDOM_STATE, REPO_ROOT, SEQ_LEN, TEST_SOURCE  # noqa: E402
 from gbt_baseline import STATS, aggregate  # noqa: E402
+
+# This is the project's primary/headline result (documentation.txt Part
+# 13) -- it gets its own top-level results/ subfolder rather than fitting
+# under strict/mixed/random_split, since it isn't really any one of those
+# static splits (it cross-validates over all of CISS).
+RESULTS_DIR = REPO_ROOT / "results" / "cross_validation"
 
 
 def main():

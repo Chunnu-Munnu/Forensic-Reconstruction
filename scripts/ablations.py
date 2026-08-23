@@ -31,8 +31,8 @@ from sklearn.utils.class_weight import compute_class_weight
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_sequences import build_sequences, load_and_clean  # noqa: E402
 from config import (  # noqa: E402
-    CLASS_NAMES, NUM_CLASSES, RANDOM_STATE, RAW_FEATURE_COLS, RESULTS_DIR,
-    SEQ_LEN, SOURCE_WEIGHTS, TEST_SOURCE, TRAIN_SOURCES,
+    CLASS_NAMES, NUM_CLASSES, RANDOM_STATE, RAW_FEATURE_COLS,
+    SEQ_LEN, SOURCE_WEIGHTS, TEST_SOURCE, TRAIN_SOURCES, results_dir,
 )
 from models import build_model  # noqa: E402
 from train import make_loader, run_epoch  # noqa: E402
@@ -143,10 +143,11 @@ def main():
               f"test_macroF1_4cls={r['test_macro_f1_4class']:.4f}")
 
     import json
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / "ablations_summary.json", "w") as f:
+    out_dir = results_dir("source")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "ablations_summary.json", "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nSaved to {RESULTS_DIR / 'ablations_summary.json'}")
+    print(f"\nSaved to {out_dir / 'ablations_summary.json'}")
 
 
 if __name__ == "__main__":

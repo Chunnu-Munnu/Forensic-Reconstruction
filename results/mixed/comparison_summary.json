@@ -91,24 +91,24 @@
   },
   "transformer": {
     "class_name": "TransformerCrashClassifier",
-    "accuracy": 0.4824561403508772,
-    "macro_f1_5class": 0.30507979956405434,
-    "macro_f1_4class_excl_headon": 0.38134974945506794,
-    "weighted_f1": 0.44008828669470734,
+    "accuracy": 0.49780701754385964,
+    "macro_f1_5class": 0.31544668836112716,
+    "macro_f1_4class_excl_headon": 0.39430836045140893,
+    "weighted_f1": 0.4667021447644129,
     "confusion_matrix": [
       [
-        26,
-        53,
+        27,
+        75,
         0,
-        62,
-        8
+        43,
+        4
       ],
       [
-        14,
-        40,
+        16,
+        61,
         0,
-        47,
-        2
+        23,
+        3
       ],
       [
         0,
@@ -118,20 +118,20 @@
         0
       ],
       [
-        7,
-        12,
+        5,
+        29,
         0,
-        148,
-        10
+        135,
+        8
       ],
       [
         0,
-        4,
+        9,
         0,
-        17,
-        6
+        14,
+        4
       ]
     ],
-    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.55      0.17      0.27       149\n         Angle       0.37      0.39      0.38       103\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.54      0.84      0.66       177\n     Sideswipe       0.23      0.22      0.23        27\n\n      accuracy                           0.48       456\n     macro avg       0.34      0.32      0.31       456\n  weighted avg       0.49      0.48      0.44       456\n"
+    "classification_report": "                precision    recall  f1-score   support\n\n      Rear-end       0.56      0.18      0.27       149\n         Angle       0.35      0.59      0.44       103\n       Head-on       0.00      0.00      0.00         0\nSingle-vehicle       0.63      0.76      0.69       177\n     Sideswipe       0.21      0.15      0.17        27\n\n      accuracy                           0.50       456\n     macro avg       0.35      0.34      0.32       456\n  weighted avg       0.52      0.50      0.47       456\n"
   }
 }

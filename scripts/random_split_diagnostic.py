@@ -21,11 +21,13 @@ import torch
 from sklearn.metrics import classification_report, f1_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import CLASS_NAMES, MODEL_DIR, NUM_CLASSES, RANDOM_STATE, RESULTS_DIR  # noqa: E402
+from config import CLASS_NAMES, NUM_CLASSES, RANDOM_STATE, model_dir, results_dir, tensor_dir  # noqa: E402
 from models import build_model  # noqa: E402
 from train import make_loader, run_epoch  # noqa: E402
 
-TENSOR_DIR = MODEL_DIR / "tensors_random_split"
+TENSOR_DIR = tensor_dir("random")
+OUT_MODEL_DIR = model_dir("random")
+OUT_RESULTS_DIR = results_dir("random")
 
 
 def load(split):
@@ -71,7 +73,8 @@ def main():
             break
 
     model.load_state_dict(best_state)
-    torch.save(best_state, MODEL_DIR / "TransformerCrashClassifier_randomsplit_best.pt")
+    OUT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    torch.save(best_state, OUT_MODEL_DIR / "TransformerCrashClassifier_best.pt")
 
     model.eval()
     preds = []
@@ -93,14 +96,15 @@ def main():
     acc = (preds == y_test).mean()
     print(f"Accuracy: {acc:.4f} | Macro-F1: {macro_f1:.4f}")
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / "random_split_diagnostic_report.txt", "w") as f:
+    OUT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = OUT_RESULTS_DIR / "random_split_diagnostic_report.txt"
+    with open(report_path, "w") as f:
         f.write(f"train={len(y_train)} val={len(y_val)} test={len(y_test)}\n")
         f.write(f"best_val_macro_f1={best_f1:.4f}\n")
         f.write(f"test_accuracy={acc:.4f}\n")
         f.write(f"test_macro_f1={macro_f1:.4f}\n\n")
         f.write(report)
-    print(f"\nSaved report to {RESULTS_DIR / 'random_split_diagnostic_report.txt'}")
+    print(f"\nSaved report to {report_path}")
 
 
 if __name__ == "__main__":

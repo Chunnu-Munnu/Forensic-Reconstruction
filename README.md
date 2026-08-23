@@ -223,7 +223,7 @@ of Phase 1's unified dataset: a BiLSTM baseline, a BiLSTM with additive
 attention, and a small Transformer encoder (the primary model). Full
 technical detail -- every design decision, every bug found and fixed,
 every result, and exact reproduction commands -- is in
-[`documentation.txt`](documentation.txt). This section is a summary.
+[`docs/documentation.txt`](docs/documentation.txt). This section is a summary.
 
 ## What was built
 
@@ -243,7 +243,7 @@ is small by deep-learning standards.
 ## Key finding
 
 Three evaluation protocols are reported side by side in
-`documentation.txt`, each answering a different question:
+`docs/documentation.txt`, each answering a different question:
 
 -   **Strict split** (Part 9) -- train only on SynSHRP2 + BeamNG, test on
     100%-held-out real CISS crashes. The hardest, most scientifically
@@ -267,7 +267,7 @@ Three evaluation protocols are reported side by side in
 
 Rear-end and Sideswipe remain the weakest classes across all three
 protocols because BeamNG currently generates zero synthetic scenarios
-for either one -- `documentation.txt` Part 13.3 has the full discussion
+for either one -- `docs/documentation.txt` Part 13.3 has the full discussion
 of what this means for a paper and the clearest concrete next step
 (generate short-window BeamNG data for those two classes specifically).
 
@@ -275,11 +275,11 @@ Several real Phase 1 data-quality defects were also found and fixed
 while building this -- duplicate timestep rows, a likely double unit
 conversion in SynSHRP2's speed field, and un-decoded NHTSA sentinel codes
 contaminating several CISS EDR fields. All are documented in full in
-`documentation.txt` Part 9.2.
+`docs/documentation.txt` Part 9.2.
 
 ## Reproducing the results
 
-See `documentation.txt` Part 10 (strict split), Part 12.5 (mixed split),
+See `docs/documentation.txt` Part 10 (strict split), Part 12.5 (mixed split),
 and Part 13.4 (cross-validated GBT, primary result) for exact commands.
 In short:
 

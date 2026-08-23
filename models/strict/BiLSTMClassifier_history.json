@@ -109,6 +109,6 @@
   ],
   "best_val_macro_f1": 0.7303250873556462,
   "n_params": 540933,
-  "train_seconds": 53.43245220184326,
+  "train_seconds": 61.850670337677,
   "epochs_run": 25
 }

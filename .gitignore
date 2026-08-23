@@ -1,16 +1,14 @@
-# Python virtual environment (recreate with scripts/setup instructions in documentation.txt)
+# Python virtual environment (recreate per docs/documentation.txt Part 8.1)
 .venv/
 __pycache__/
 *.pyc
 
 # Regeneratable intermediate tensors (rebuild with scripts/build_sequences.py)
-models/tensors/
-models/tensors_random_split/
-models/tensors_mixed_split/
-models/shap_background_X*.npy
-models/shap_background_mask*.npy
+models/*/tensors/
+models/*/shap_background_X.npy
+models/*/shap_background_mask.npy
 
 # Large per-event evaluation arrays (regeneratable with scripts/evaluate.py)
-results/*_test_probs.npy
-results/*_test_preds.npy
-results/*_test_attention_weights.npy
+results/*/*_test_probs.npy
+results/*/*_test_preds.npy
+results/*/*_test_attention_weights.npy

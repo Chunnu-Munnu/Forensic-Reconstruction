@@ -37,7 +37,7 @@ from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import MODEL_DIR, NUM_CLASSES, RANDOM_STATE, RESULTS_DIR, TENSOR_DIR  # noqa: E402
+from config import NUM_CLASSES, RANDOM_STATE, model_dir, tensor_dir  # noqa: E402
 from models import build_model  # noqa: E402
 
 MODEL_NAMES = {
@@ -46,11 +46,12 @@ MODEL_NAMES = {
     "transformer": "TransformerCrashClassifier",
 }
 
-# Set by main() from --split-mode; used to pick the tensor directory
-# build_sequences.py wrote to, and to tag checkpoint/history filenames so
-# different splits' models never overwrite each other.
-_TENSOR_DIR = TENSOR_DIR
-_TAG = ""
+# Set by main() from --split-mode. Checkpoints (and the training-curve
+# history.json alongside them) for a given split live under
+# models/<split>/; results/<split>/ is reserved for evaluate.py's
+# test-set outputs (confusion matrices, prediction arrays, summaries).
+_TENSOR_DIR = tensor_dir("source")
+_MODEL_DIR = model_dir("source")
 
 
 def load_split(split):
@@ -128,7 +129,7 @@ def train_one(model_key, epochs, batch_size, lr, patience, device):
 
     best_val_f1, patience_ctr = -1.0, 0
     history = {"train_loss": [], "val_loss": [], "val_macro_f1": [], "lr": []}
-    ckpt_path = MODEL_DIR / f"{class_name}{_TAG}_best.pt"
+    ckpt_path = _MODEL_DIR / f"{class_name}_best.pt"
 
     t0 = time.time()
     for epoch in range(1, epochs + 1):
@@ -163,8 +164,7 @@ def train_one(model_key, epochs, batch_size, lr, patience, device):
     history["n_params"] = n_params
     history["train_seconds"] = elapsed
     history["epochs_run"] = len(history["train_loss"])
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / f"{class_name}{_TAG}_history.json", "w") as f:
+    with open(_MODEL_DIR / f"{class_name}_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
     return best_val_f1
@@ -178,16 +178,15 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--split-mode", choices=["source", "mixed"], default="source",
-                         help="which build_sequences.py tensor dir to train on. 'source' "
-                              "(default) reads models/tensors/ (strict split). 'mixed' reads "
-                              "models/tensors_mixed_split/ and tags checkpoints/history with "
-                              "'_mixed' so they don't overwrite the strict-split ones.")
+                         help="which build_sequences.py output to train on: 'source' "
+                              "(default, strict split) reads models/strict/, 'mixed' reads "
+                              "models/mixed/. Checkpoints and training curves are written "
+                              "back into that same directory.")
     args = parser.parse_args()
 
-    global _TENSOR_DIR, _TAG
-    if args.split_mode == "mixed":
-        _TENSOR_DIR = TENSOR_DIR.parent / "tensors_mixed_split"
-        _TAG = "_mixed"
+    global _TENSOR_DIR, _MODEL_DIR
+    _TENSOR_DIR = tensor_dir(args.split_mode)
+    _MODEL_DIR = model_dir(args.split_mode)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
@@ -195,7 +194,7 @@ def main():
     else:
         print("CUDA not available, using CPU")
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     keys = list(MODEL_NAMES) if args.model == "all" else [args.model]
     results = {}

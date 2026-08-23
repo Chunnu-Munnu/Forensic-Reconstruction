@@ -11,9 +11,10 @@ summary statistics over the REAL (non-padded) timesteps only: mean, std,
 min, max, and the last real value (closest to impact, generally the most
 informative single point for a crash). That's 11 x 5 = 55 engineered
 features per event, built directly from the already-cleaned, already-
-scaled tensors in models/tensors_mixed_split/ -- no re-reading the raw CSV.
+scaled tensors in models/mixed/tensors/ -- no re-reading the raw CSV.
 
 Usage:
+    .venv\\Scripts\\python.exe scripts\\build_sequences.py --split-mode mixed   (if not already run)
     .venv\\Scripts\\python.exe scripts\\gbt_baseline.py
 """
 
@@ -25,9 +26,9 @@ import xgboost as xgb
 from sklearn.metrics import classification_report, f1_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import CLASS_NAMES, FEATURE_COLS, NUM_CLASSES, RANDOM_STATE, RESULTS_DIR  # noqa: E402
+from config import CLASS_NAMES, FEATURE_COLS, NUM_CLASSES, RANDOM_STATE, results_dir, tensor_dir  # noqa: E402
 
-TENSOR_DIR = Path(__file__).resolve().parent.parent / "models" / "tensors_mixed_split"
+TENSOR_DIR = tensor_dir("mixed")
 
 STATS = ["mean", "std", "min", "max", "last"]
 
@@ -122,13 +123,15 @@ def main():
     for i in top_idx:
         print(f"  {feature_names[i]:<30} {importances[i]:.4f}")
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / "gbt_baseline_report.txt", "w") as f:
+    out_dir = results_dir("mixed")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / "gbt_baseline_report.txt"
+    with open(report_path, "w") as f:
         f.write(f"test_accuracy={acc:.4f}\ntest_macro_f1_5class={macro_f1_5:.4f}\n"
                 f"test_macro_f1_4class={macro_f1_4:.4f}\n\n{report}\n\nTop features:\n")
         for i in top_idx:
             f.write(f"  {feature_names[i]:<30} {importances[i]:.4f}\n")
-    print(f"\nSaved to {RESULTS_DIR / 'gbt_baseline_report.txt'}")
+    print(f"\nSaved to {report_path}")
 
 
 if __name__ == "__main__":

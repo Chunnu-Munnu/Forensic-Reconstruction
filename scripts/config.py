@@ -12,9 +12,37 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_CSV = REPO_ROOT / "Dataset" / "data" / "training_dataset_final.csv"
-TENSOR_DIR = REPO_ROOT / "models" / "tensors"
-MODEL_DIR = REPO_ROOT / "models"
-RESULTS_DIR = REPO_ROOT / "results"
+
+# Every artifact this pipeline produces is organized under models/<split>/
+# and results/<split>/, where <split> is one of "strict", "mixed", or
+# "random_split" (documentation.txt Parts 9, 12, 9.6(B) respectively).
+# This replaces an earlier layout that suffix-tagged filenames instead
+# (e.g. TransformerCrashClassifier_mixed_best.pt sitting flat in
+# models/); the directory-per-protocol layout is what actually reads as
+# organized on GitHub instead of ~30 similarly-named files in one folder.
+_MODELS_ROOT = REPO_ROOT / "models"
+_RESULTS_ROOT = REPO_ROOT / "results"
+
+SPLIT_DIR_NAMES = {"source": "strict", "mixed": "mixed", "random": "random_split"}
+
+
+def model_dir(split_mode="source"):
+    return _MODELS_ROOT / SPLIT_DIR_NAMES[split_mode]
+
+
+def results_dir(split_mode="source"):
+    return _RESULTS_ROOT / SPLIT_DIR_NAMES[split_mode]
+
+
+def tensor_dir(split_mode="source"):
+    return model_dir(split_mode) / "tensors"
+
+
+# Kept for any code that still wants the old flat-directory names (e.g.
+# to just `.mkdir()` the top-level models/ and results/ folders).
+MODEL_DIR = _MODELS_ROOT
+RESULTS_DIR = _RESULTS_ROOT
+TENSOR_DIR = tensor_dir("source")
 
 RANDOM_STATE = 42
 
